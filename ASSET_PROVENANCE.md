@@ -1,0 +1,25 @@
+# Прозрачная схема автомобиля
+
+Дополнительно созданы `src/assets/pitch-side-v2.png` (2172×724) и `src/assets/roll-rear-v2.png` (1448×1086), оба PNG с alpha, тем же встроенным инструментом. Они заменяют первоначальные примитивные SVG-автомобили на индикаторах наклона.
+
+Файл: `src/assets/xray-drivetrain.png`, 1122×1402 px, PNG с alpha. Создан 16 ноября 2026 встроенным инструментом генерации изображений на основании предоставленного пользователем визуального референса. Higgsfield исследован как альтернативный путь; его доступные Tripo/Meshy параметры не гарантируют отдельно анимируемые механические узлы. Сторонний GLB или код GPL renderer не использован.
+
+Это иллюстративный CGI-концепт устройства полного привода, не инженерная CAD-модель BMW G07. Анимации приложения показывают mock-телеметрию через отдельные слои. Рендер не доказывает точное расположение агрегатов конкретной комплектации.
+
+## Промпт генерации
+
+Use case: stylized-concept / automotive technical cutaway. Create a NEW premium, photorealistic CGI asset for a BMW X7 G07 off-road telemetry dashboard, based on the attached reference ONLY for the translucent x-ray drivetrain idea. Not a screenshot, no UI or text. The previous low-poly car was rejected: absolutely smooth detailed professional automotive visualization, no faceted polygon toy. Composition: single complete long luxury SUV shown from a high near-top rear three-quarter camera with only slight perspective, FRONT OF VEHICLE AT TOP of image, REAR AT BOTTOM; left/right balanced nearly symmetric, vehicle occupies 85% of image, portrait-ish 4:5 canvas with generous transparent margins. Polished dark graphite semi-transparent ghost body shell, elegant thin silver edges and transparent hood, cabin, roof and floor, so the complete silver mechanical architecture is clearly visible through it. Chassis anatomy: realistic longitudinal engine toward the TOP front axle, gearbox directly behind it, central transfer case, long prop shaft to rear differential toward BOTTOM, cross shafts connecting to all FOUR realistic black tyres, visible metallic brake discs/calipers and red/steel coil/air suspension assemblies at all four corners. Precisely FOUR tyres, sensible real automotive geometry, physically plausible single connected driveline. Body outline recognizably a modern large luxury SUV, not a truck or box. No opaque roof or opaque hood hiding the systems. Drivetrain remains much brighter and more visible than the ghost body. Materials: finely machined brushed steel, aluminium, black rubber, dark translucent glass; studio rim lighting designed to read on a near-black #04060a UI. Neutral silver/white mechanical parts, subtle pale blue shell highlights, small restrained red suspension accents. No glow effects, NO arrows, NO labels, NO typography, NO logos, NO watermark, NO environment, NO ground plane, NO background, NO cast rectangular shadow. Actual transparent alpha outside the car. Full vehicle in frame, sharp clear detail, polished OEM technical presentation quality. This is one reusable still asset: interactive arrows, spinning indicators, spring travel and telemetry glows will be rendered separately by application code.
+
+## Промпты изображений индикаторов
+
+Общая часть обоих промптов:
+
+Create a NEW polished OEM automotive instrument-cluster sprite, intended to remain clear at only 150 pixels wide on a near-black BMW-style dashboard. Use the attached cutaway image only for restrained silver/graphite materials and modern luxury SUV identity, NOT its camera angle or full drivetrain composition. Smooth high-quality CGI, contemporary BMW X7 G07-like proportions, elegant subtle translucent pearl-grey graphite body and crisp platinum edges, restrained ice-blue rim accents, realistic dark tyres and finely machined silver wheels. No low-poly facets, no cartoon box, no text, no logo, no labels, no instrument dial, no arrows, no landscape, no floor, no ground shadow, no solid background. Actual transparent alpha outside the vehicle. The vehicle must be level, perfectly centered, completely in frame with 10% margins, no pitch or roll. Simplify tiny mechanical detail for exceptional legibility; crisp clean silhouette and broad premium surfaces. This is an image asset to be rotated by app code.
+
+Дополнение для pitch-side-v2:
+
+CAMERA AND COMPOSITION: exact orthographic SIDE PROFILE, looking square-on at the vehicle's left side. Nose/front points RIGHT, tail LEFT. Both visible wheels are true circles, aligned at the same height. Long luxury SUV roof, recognizably modern headlight and window line. Side profile only; do not see front/rear faces or roof top. Wide horizontal canvas approximately 3:1.
+
+Дополнение для roll-rear-v2:
+
+CAMERA AND COMPOSITION: exact orthographic REAR ELEVATION, looking square-on at the back. Bilateral symmetry, see the rear tailgate, graceful narrow red LED tail lamps, two wide rear tyres, subtle bumper and hints of independent rear suspension. No number plate text. The silhouette is broad and substantial, not squat or toy-like. Horizontal canvas approximately 4:3. This will be used for a roll indicator viewed from behind.

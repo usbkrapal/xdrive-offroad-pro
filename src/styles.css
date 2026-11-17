@@ -1,0 +1,2515 @@
+/* Terrain Monitor — автомобильный приборный стиль. Собственный CSS, системные шрифты. */
+
+:root {
+  --bg: #04060a;
+  --bg-2: #080b10;
+  --text: #f4f7fb;
+  --dim: #8a95a6;
+  --track: #1b212b;
+  --tick: #4c5666;
+  --ice: #81c4ff;
+  --cold: #7fd1ff;
+  --m-blue: #16588e;
+  --m-red: #e7222e;
+  --red: #ef2b2d;
+  --warn: #ffb020;
+  --panel: rgba(214, 224, 240, 0.055);
+  --panel-line: rgba(244, 247, 251, 0.13);
+  --hair: rgba(244, 247, 251, 0.08);
+
+  --gap: clamp(8px, 1.4vh, 14px);
+  --pad: clamp(12px, 1.6vw, 24px);
+  --header-h: clamp(48px, 8.5vh, 68px);
+  --bar-h: clamp(40px, 6.6vh, 52px);
+
+  --fs-xl: clamp(32px, 7.6vh, 64px);
+  --fs-lg: clamp(28px, 5.4vh, 48px);
+  --fs-md: clamp(22px, 3.8vh, 34px);
+  --fs-sm: clamp(18px, 2.8vh, 24px);
+  --fs-label: clamp(11px, 1.75vh, 14px);
+  --fs-hint: clamp(10px, 1.55vh, 13px);
+
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', Arial, sans-serif;
+
+  color-scheme: dark;
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+}
+
+button,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ice);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------------- Каркас ---------------- */
+
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100vh;
+  height: 100dvh;
+  max-width: 2200px;
+  margin: 0 auto;
+}
+
+.main {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--gap) var(--pad);
+}
+
+.screen {
+  height: 100%;
+}
+
+.screen:focus-visible {
+  outline-offset: -2px;
+}
+
+/* ---------------- Шапка ---------------- */
+
+.header {
+  position: relative;
+  display: grid;
+  /* Правый трек не уже своего содержимого (бейдж + часы): при нехватке места сжимается бренд,
+     а не выталкивается бейдж за край. На широких экранах треки равны — вкладки по центру. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
+  align-items: center;
+  gap: var(--pad);
+  height: var(--header-h);
+  padding: 0 var(--pad);
+  background: var(--bg);
+  border-bottom: 1px solid var(--panel-line);
+}
+
+.header__rule {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 180px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--ice) 0 33.3%, var(--m-blue) 33.3% 66.6%, var(--m-red) 66.6%);
+}
+
+.header__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mstripe {
+  display: inline-flex;
+  flex: none;
+  transform: skewX(-20deg);
+}
+
+.mstripe i {
+  width: 9px;
+  height: 22px;
+  margin-right: 3px;
+  background: var(--ice);
+}
+
+.mstripe i:nth-child(2) {
+  background: var(--m-blue);
+}
+
+.mstripe i:nth-child(3) {
+  background: var(--m-red);
+}
+
+.header__titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.header__title {
+  font-size: clamp(16px, 2.8vh, 22px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header__subtitle {
+  font-size: var(--fs-hint);
+  color: var(--dim);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabs {
+  display: flex;
+  height: 100%;
+}
+
+.tab {
+  position: relative;
+  height: 100%;
+  padding: 0 clamp(14px, 1.8vw, 34px);
+  border: 0;
+  border-left: 1px solid var(--hair);
+  background: none;
+  color: var(--dim);
+  font-size: clamp(14px, 2.5vh, 19px);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab:last-child {
+  border-right: 1px solid var(--hair);
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.is-active {
+  color: var(--text);
+  background: linear-gradient(to top, rgba(239, 43, 45, 0.2), rgba(239, 43, 45, 0) 75%);
+}
+
+.tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: var(--red);
+}
+
+.tab:focus-visible {
+  outline-offset: -4px;
+}
+
+.header__right {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.demo-badge {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid rgba(255, 176, 32, 0.65);
+  color: var(--warn);
+  font-size: clamp(11px, 1.7vh, 13px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.header__clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.1;
+}
+
+.header__clock-label {
+  font-size: var(--fs-hint);
+  color: var(--dim);
+}
+
+.header__clock-value {
+  font-size: clamp(15px, 2.6vh, 20px);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- Панели и значения ---------------- */
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: clamp(8px, 1.6vh, 16px) clamp(10px, 1vw, 18px);
+  background: var(--panel);
+  border-top: 1px solid var(--panel-line);
+}
+
+.panel::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 56px;
+  height: 3px;
+  background: var(--ice);
+}
+
+.panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: clamp(6px, 1.2vh, 12px);
+}
+
+.panel__title {
+  margin: 0;
+  font-size: clamp(11px, 1.8vh, 14px);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.panel__hint {
+  font-size: var(--fs-hint);
+  color: var(--dim);
+}
+
+.panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1.3vh, 14px);
+  flex: 1;
+  min-height: 0;
+}
+
+.readout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.readout__label {
+  font-size: var(--fs-label);
+  color: var(--dim);
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.readout__value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  row-gap: 2px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.readout__num {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.readout--xl .readout__num {
+  font-size: var(--fs-xl);
+  font-weight: 400;
+}
+
+.readout--lg .readout__num {
+  font-size: var(--fs-lg);
+  font-weight: 400;
+}
+
+.readout--md .readout__num {
+  font-size: var(--fs-md);
+}
+
+.readout--sm .readout__num {
+  font-size: var(--fs-sm);
+}
+
+.readout__unit {
+  font-size: clamp(12px, 2vh, 17px);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.readout.is-missing .readout__num {
+  color: var(--tick);
+}
+
+.readout__hint {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  font-size: var(--fs-hint);
+  color: var(--dim);
+  line-height: 1.3;
+}
+
+.readout__hint code {
+  font-family: inherit;
+  color: var(--tick);
+}
+
+.readout.is-active .readout__num {
+  color: var(--ice);
+}
+
+.delta {
+  color: var(--ice);
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  margin: 0;
+  font-size: var(--fs-hint);
+  color: var(--dim);
+  line-height: 1.35;
+}
+
+/* Статус качества: текст + форма значка (не только цвет). */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: center;
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+  font-size: clamp(10px, 1.6vh, 12px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.status--compact {
+  padding: 1px 5px;
+}
+
+.status__mark {
+  width: 8px;
+  height: 8px;
+  flex: none;
+}
+
+.status--stale {
+  color: var(--warn);
+}
+
+.status--stale .status__mark {
+  border: 1.5px solid currentColor;
+  background: linear-gradient(135deg, currentColor 50%, transparent 50%);
+}
+
+.status--unavailable {
+  color: var(--dim);
+}
+
+.status--unavailable .status__mark {
+  border: 1.5px dashed currentColor;
+  border-radius: 50%;
+}
+
+.status--invalid {
+  color: #ff6a6c;
+}
+
+.status--invalid .status__mark {
+  background:
+    linear-gradient(45deg, transparent 40%, currentColor 40% 60%, transparent 60%),
+    linear-gradient(-45deg, transparent 40%, currentColor 40% 60%, transparent 60%);
+}
+
+.source-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid rgba(255, 176, 32, 0.55);
+  color: var(--warn);
+  font-size: clamp(10px, 1.6vh, 12px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.bar {
+  position: relative;
+  height: 6px;
+  margin-top: 6px;
+  background: var(--track);
+}
+
+.bar--signed::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--tick);
+}
+
+.bar.is-empty {
+  background: repeating-linear-gradient(135deg, var(--track) 0 4px, transparent 4px 8px);
+}
+
+.bar__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: width 0.12s linear, left 0.12s linear;
+}
+
+.bar__fill--ice {
+  background: var(--ice);
+}
+
+.bar__fill--warn {
+  background: var(--warn);
+}
+
+.bar__fill--dim {
+  background: #b9c4d4;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(8px, 1vw, 16px);
+}
+
+/* Пара с длинным текстовым значением («Частично», «Заблокирован»): поля по собственной
+   ширине, при нехватке места второе переносится на новую строку, а не наезжает. */
+.pair--wrap {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: clamp(4px, 0.8vh, 10px);
+}
+
+.pair--wrap > .readout {
+  flex: 1 0 auto;
+  max-width: 100%;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: var(--fs-label);
+}
+
+.kv dt {
+  color: var(--dim);
+}
+
+.kv dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.kv__note {
+  color: var(--tick);
+  font-size: var(--fs-hint);
+}
+
+/* ---------------- Рельеф ---------------- */
+
+.terrain {
+  display: grid;
+  height: 100%;
+  min-height: 360px;
+  grid-template-columns: minmax(290px, 21%) minmax(0, 1fr) minmax(260px, 19%);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'att stage side'
+    'strip strip strip';
+  gap: var(--gap);
+}
+
+.terrain__attitude,
+.terrain__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+.terrain__attitude {
+  grid-area: att;
+}
+
+.terrain__side {
+  grid-area: side;
+}
+
+.terrain__attitude > .panel,
+.terrain__side > .panel {
+  flex: 1 1 0;
+  justify-content: center;
+}
+
+.terrain__side > .panel > .panel__body,
+.terrain__attitude > .panel > .panel__body {
+  justify-content: center;
+}
+
+.terrain__stage {
+  grid-area: stage;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.terrain__strip {
+  grid-area: strip;
+  display: flex;
+  align-items: stretch;
+  gap: var(--gap);
+}
+
+.strip__group {
+  display: flex;
+  align-items: center;
+  gap: clamp(14px, 2.2vw, 40px);
+  padding: clamp(6px, 1.3vh, 12px) clamp(12px, 1.4vw, 22px);
+  background: var(--panel);
+  border-top: 1px solid var(--panel-line);
+}
+
+.strip__group--drive {
+  flex: 0 0 auto;
+}
+
+.strip__group--session {
+  flex: 1 1 auto;
+  justify-content: space-between;
+  position: relative;
+}
+
+.strip__caption {
+  align-self: stretch;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+  font-size: clamp(10px, 1.5vh, 12px);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border-left: 1px solid var(--hair);
+  padding-left: 8px;
+}
+
+/* Индикаторы тангажа/крена */
+
+/* Прибор во всю ширину карточки, под ним крупное число. Высоту делит flex:
+   на невысоких экранах — ряд (прибор слева, число справа), в потоковой вёрстке — по aspect-ratio. */
+.attitude {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  gap: clamp(4px, 1.2vh, 12px);
+}
+
+.attitude__dial {
+  display: block;
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 72px;
+  overflow: visible;
+}
+
+.attitude__readout {
+  flex: none;
+  min-width: 0;
+}
+
+.attitude__readout .readout__num {
+  font-size: min(var(--fs-xl), 17cqi);
+}
+
+/* Круглый ободок: тонкие кольца поверх градиента, внутри — тёмный круглый циферблат. */
+.att__bezel-outer {
+  stroke: rgba(190, 220, 250, 0.22);
+  stroke-width: 1;
+}
+
+.att__bezel-ring {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 1.5;
+}
+
+.att__bezel-inner {
+  fill: none;
+  stroke: rgba(190, 220, 250, 0.2);
+  stroke-width: 1;
+}
+
+.att__face {
+  stroke: rgba(0, 0, 0, 0.8);
+  stroke-width: 1.5;
+}
+
+.att__track {
+  fill: none;
+  stroke: rgba(244, 247, 251, 0.1);
+  stroke-width: 1;
+}
+
+/* Неподвижный горизонт и шкала; вращаются только автомобиль, ось и указатель. */
+.att__horizon {
+  stroke: rgba(129, 196, 255, 0.32);
+  stroke-width: 0.8;
+  stroke-dasharray: 2 5;
+}
+
+.att__value {
+  fill: none;
+}
+
+.att__tick {
+  stroke: rgba(244, 247, 251, 0.32);
+  stroke-width: 1;
+  stroke-linecap: round;
+}
+
+.att__tick--major {
+  stroke: rgba(244, 247, 251, 0.7);
+  stroke-width: 1.4;
+}
+
+.att__tick--zero {
+  stroke: var(--text);
+  stroke-width: 2.4;
+}
+
+.att__num {
+  fill: var(--dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.att__num--zero {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+/* Дуга значения от нуля; короткая интерполяция без перелёта (пауза/reduced-motion — сразу). */
+.att__value {
+  stroke: var(--cold);
+  stroke-width: 3.5;
+  stroke-linecap: butt;
+  filter: drop-shadow(0 0 3px rgba(56, 189, 255, 0.55));
+  transition: stroke-dasharray 0.18s ease-out;
+}
+
+.att__vehicle {
+  transition: transform 0.18s ease-out;
+}
+
+.att__sprite {
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.55));
+  transition: opacity 0.18s ease-out;
+}
+
+.att__axis {
+  stroke: var(--ice);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-dasharray: 1 3;
+}
+
+.att__pointer {
+  fill: #eaf7ff;
+  stroke: var(--cold);
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+
+/* Нет данных: автомобиль приглушён, указателя и дуги нет — это не «0°». */
+.attitude.is-missing .att__sprite {
+  opacity: 0.25;
+  filter: grayscale(1);
+}
+
+.attitude.is-missing .att__horizon {
+  stroke: rgba(138, 149, 166, 0.4);
+}
+
+/* Руль */
+
+.steering {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 1vw, 16px);
+}
+
+.steering__wheel {
+  flex: none;
+  width: clamp(48px, 10vh, 84px);
+  height: clamp(48px, 10vh, 84px);
+}
+
+.steering__rot {
+  transition: transform 0.12s linear;
+}
+
+.steering__rim {
+  fill: none;
+  stroke: #c9d3e1;
+  stroke-width: 6;
+}
+
+.steering__hub {
+  fill: #2a313c;
+  stroke: #c9d3e1;
+  stroke-width: 2;
+}
+
+.steering__spoke {
+  stroke: #c9d3e1;
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.steering__mark {
+  fill: var(--red);
+}
+
+.steering.is-missing .steering__wheel {
+  opacity: 0.3;
+}
+
+/* Уровень подвески */
+
+/* Шкала уровней — горизонтальной полосой под названием, чтобы длинное «Внедорожный»
+   получало всю ширину карточки (~227px при 267px), без обрезки. */
+.level--compact {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.level--compact .readout__num {
+  font-size: min(var(--fs-md), 12cqi);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Полный вариант (экран «Подвеска»): ~225px внутренней ширины при 1440×900, а «Внедорожный»
+   в --fs-lg — ~300px. Размер от фактической ширины (cqi), перенос — только как запасной вариант.
+   Контейнер — по inline-размеру, высота остаётся по содержимому. */
+.level--full {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.level--full .readout__num {
+  font-size: min(var(--fs-lg), 14.5cqi);
+  white-space: normal;
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+
+.level__notches {
+  display: flex;
+  gap: 3px;
+  flex: none;
+}
+
+.level__notches i {
+  width: 22px;
+  height: 5px;
+  background: var(--track);
+}
+
+.level__notches i.is-current {
+  background: var(--ice);
+}
+
+.level__scale {
+  margin-top: clamp(10px, 2vh, 20px);
+}
+
+.level__scale-title {
+  font-size: var(--fs-hint);
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+
+.level__ladder {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-left: 1px solid var(--tick);
+}
+
+.level__ladder li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: clamp(3px, 0.8vh, 7px) 10px;
+  font-size: clamp(13px, 2vh, 16px);
+  color: var(--tick);
+}
+
+.level__ladder li.is-current {
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--ice);
+  background: rgba(129, 196, 255, 0.08);
+}
+
+.level__pip {
+  width: 8px;
+  height: 8px;
+  border: 1px solid currentColor;
+}
+
+.level__ladder li.is-current .level__pip {
+  background: var(--ice);
+  border-color: var(--ice);
+}
+
+.level__note {
+  margin-top: 8px;
+  font-size: var(--fs-hint);
+  color: var(--tick);
+}
+
+/* Прозрачная схема привода (DrivetrainStage). Единицы — пиксели исходного PNG 1122×1402. */
+
+.dts {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  position: relative;
+}
+
+.dts__svg {
+  /* Ед. viewBox на экранный пиксель; уточняется из ResizeObserver (DrivetrainStage). */
+  --u: 3;
+  --w: 0;
+  --wb: 0;
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Современная техническая подача: толщины — в экранных пикселях, calc(var(--u) * Npx),
+   где --u — единиц viewBox на пиксель (ставится из ResizeObserver; 3 — запасное значение).
+   Смыслы цветов: циан — момент на валах, янтарь — пробуксовка, красный — тормоз,
+   серый — неизвестно / вращение без тяги. Переходы короткие (~180 мс); в паузе и при
+   reduced-motion все переходы и CSS-анимации выключаются сразу. */
+.dts__track,
+.dts__leader,
+.dts__core,
+.dts__core-glow,
+.dts__load-static,
+.dts__pulse path,
+.dts__diff-track,
+.dts__diff-lock,
+.dts__diff-lock-glow,
+.dts__brake,
+.dts__brake-glow,
+.dts__brake-missing {
+  fill: none;
+  stroke-linecap: round;
+}
+
+/* Валы */
+.dts__track {
+  stroke: rgba(190, 215, 240, 0.3);
+  stroke-width: calc(var(--u) * 1.5px);
+}
+
+.dts__shaft.is-missing .dts__track {
+  stroke: rgba(138, 149, 166, 0.55);
+  stroke-dasharray: 14 16;
+}
+
+/* Тяга: циановое ядро вала (2.5–4px) с мягким свечением; толщина и яркость — по нагрузке. */
+.dts__core,
+.dts__core-glow {
+  transition:
+    stroke-width 0.18s ease-out,
+    stroke-opacity 0.18s ease-out;
+}
+
+.dts__core {
+  stroke: #7fdcff;
+  stroke-width: calc(var(--u) * (2.5px + var(--w) * 1.5px));
+}
+
+.dts__core-glow {
+  stroke: #38bdff;
+  stroke-opacity: calc(0.22 + var(--w) * 0.2);
+  stroke-width: calc(var(--u) * (10px + var(--w) * 8px));
+}
+
+.dts__shaft.is-thin .dts__core {
+  stroke-width: calc(var(--u) * (2px + var(--w) * 1.2px));
+}
+
+.dts__shaft.is-thin .dts__core-glow {
+  stroke-width: calc(var(--u) * (8px + var(--w) * 6px));
+}
+
+/* Оценка по доле оси: ядро вала и пакетов приглушено. */
+.dts__shaft.is-estimate .dts__core {
+  stroke-opacity: 0.6;
+}
+
+.dts__shaft.is-estimate .dts__pulse-core {
+  stroke-opacity: 0.7;
+}
+
+/* Бегущие пакеты: хвост → середина → яркая голова. */
+.dts__pulse {
+  transition: opacity 0.18s ease-out;
+}
+
+.dts__pulse-tail {
+  stroke: #2fb4ff;
+  stroke-opacity: 0.32;
+  stroke-width: calc(var(--u) * (11px + var(--w) * 6px));
+}
+
+.dts__pulse-mid {
+  stroke: #8fdcff;
+  stroke-opacity: 0.8;
+  stroke-width: calc(var(--u) * (5px + var(--w) * 2.5px));
+}
+
+.dts__pulse-core {
+  stroke: #f4fbff;
+  stroke-width: calc(var(--u) * (3px + var(--w) * 1px));
+}
+
+.dts__shaft.is-thin .dts__pulse-tail {
+  stroke-width: calc(var(--u) * (9px + var(--w) * 5px));
+}
+
+.dts__shaft.is-thin .dts__pulse-mid {
+  stroke-width: calc(var(--u) * (4px + var(--w) * 2px));
+}
+
+.dts__shaft.is-thin .dts__pulse-core {
+  stroke-width: calc(var(--u) * (2.5px + var(--w) * 1px));
+}
+
+/* Вход без тяги (момент неизвестен, 0 или < 0): вращение есть, нагрузки нет —
+   серые пакеты без циана и без ядра вала. */
+.dts__shaft.is-unknown .dts__pulse-tail {
+  stroke: #c8d0dc;
+  stroke-opacity: 0.16;
+  stroke-width: calc(var(--u) * 7px);
+}
+
+.dts__shaft.is-unknown .dts__pulse-mid {
+  stroke: #d2dae4;
+  stroke-opacity: 0.45;
+  stroke-width: calc(var(--u) * 3.5px);
+}
+
+.dts__shaft.is-unknown .dts__pulse-core {
+  stroke: #e6ebf2;
+  stroke-opacity: 0.85;
+  stroke-width: calc(var(--u) * 2.2px);
+}
+
+/* Торможение двигателем: статичная нейтральная полоса, без импульсов к колёсам. */
+.dts__load-static {
+  stroke: rgba(200, 208, 220, 0.45);
+  stroke-width: calc(var(--u) * (3px + var(--wb) * 3px));
+  transition: stroke-width 0.18s ease-out;
+}
+
+/* Вращение вала: нейтральные поперечные блики по самому валу (двигатель / колёса оси).
+   Смещение — из rAF-фазы, своих CSS-анимаций нет. */
+.dts__spin {
+  fill: none;
+  stroke: rgba(236, 243, 250, 0.42);
+  stroke-width: calc(var(--u) * 6px);
+  stroke-linecap: butt;
+}
+
+.dts__shaft.is-thin .dts__spin {
+  stroke-width: calc(var(--u) * 5px);
+}
+
+/* Узлы внутри деталей: поршни двигателя, шестерни АКПП/раздатки/дифференциалов.
+   Нейтрально — вращение без тяги; is-load — тяга (циан, по --w); is-missing — статично и тускло. */
+.dts__piston,
+.dts__gear,
+.dts__coil-stretch,
+.dts__coil-cap.is-moving {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.dts__piston-crown {
+  fill: rgba(210, 222, 236, 0.16);
+  stroke: rgba(226, 236, 248, 0.75);
+  stroke-width: calc(var(--u) * 1.6px);
+  transition:
+    fill 0.18s ease-out,
+    stroke 0.18s ease-out;
+}
+
+.dts__piston-pin {
+  fill: rgba(236, 243, 250, 0.7);
+}
+
+.dts__engine.is-off .dts__piston {
+  opacity: 0.4;
+}
+
+.dts__node.is-load .dts__piston-crown {
+  fill: rgba(56, 189, 255, calc(0.22 + var(--w) * 0.3));
+  stroke: #9fe2ff;
+}
+
+.dts__node.is-load .dts__piston-pin {
+  fill: #e6f7ff;
+}
+
+.dts__gear-box {
+  fill: none;
+  stroke: none;
+}
+
+.dts__gear-teeth {
+  fill: rgba(200, 216, 234, 0.14);
+  stroke: rgba(226, 236, 248, 0.78);
+  stroke-width: calc(var(--u) * 1.5px);
+  stroke-linejoin: round;
+  transition:
+    fill 0.18s ease-out,
+    stroke 0.18s ease-out;
+}
+
+.dts__gear-hub {
+  fill: rgba(10, 14, 20, 0.6);
+  stroke: rgba(226, 236, 248, 0.7);
+  stroke-width: calc(var(--u) * 1.2px);
+}
+
+.dts__gear-mark {
+  stroke: rgba(240, 246, 252, 0.9);
+  stroke-width: calc(var(--u) * 1.6px);
+  stroke-linecap: round;
+}
+
+.dts__node.is-load .dts__gear-teeth {
+  fill: rgba(56, 189, 255, calc(0.2 + var(--w) * 0.25));
+  stroke: #9fe2ff;
+}
+
+.dts__node.is-hot .dts__gear-teeth {
+  stroke: var(--warn);
+}
+
+.dts__gearset.is-missing .dts__gear {
+  opacity: 0.35;
+}
+
+.dts__gearset.is-missing .dts__gear-teeth {
+  fill: none;
+  stroke: rgba(138, 149, 166, 0.8);
+  stroke-dasharray: 4 4;
+}
+
+.dts__diff-track {
+  stroke: rgba(176, 208, 238, 0.4);
+  stroke-width: calc(var(--u) * 2px);
+  transition: stroke 0.18s ease-out;
+}
+
+.dts__node.is-load .dts__diff-track {
+  stroke: #7fdcff;
+  stroke-width: calc(var(--u) * 2.5px);
+}
+
+.dts__diff-lock,
+.dts__diff-lock-glow {
+  stroke-linecap: butt;
+  transition: stroke-dasharray 0.18s ease-out;
+}
+
+.dts__diff-lock {
+  stroke: var(--cold);
+  stroke-width: calc(var(--u) * 5px);
+}
+
+.dts__diff-lock-glow {
+  stroke: #38bdff;
+  stroke-opacity: 0.3;
+  stroke-width: calc(var(--u) * 14px);
+}
+
+.dts__diff-lock-g.is-locked .dts__diff-lock {
+  stroke: #e2f4ff;
+}
+
+.dts__diff-lock-g.is-locked .dts__diff-lock-glow {
+  stroke-opacity: 0.45;
+}
+
+/* Шины: беговая дорожка внутри силуэта каждой шины. Ламели «ёлочки» задаются в единицах
+   изображения (масштабируются вместе с шиной), сдвиг — из rAF-фазы колеса. */
+.dts__tread-lug {
+  fill: none;
+  stroke: rgba(205, 218, 232, 0.4);
+  stroke-width: 7;
+  stroke-linecap: round;
+  transition: stroke 0.18s ease-out;
+}
+
+.dts__tyre.is-missing .dts__tread-lug {
+  stroke: rgba(138, 149, 166, 0.16);
+}
+
+.dts__tyre.is-slip .dts__tread-lug {
+  stroke: rgba(255, 214, 140, 0.62);
+}
+
+.dts__tyre-slip {
+  transition: opacity 0.18s ease-out;
+}
+
+.dts__tyre-edge {
+  fill: none;
+  stroke: rgba(214, 226, 240, 0.28);
+  stroke-width: calc(var(--u) * 1px);
+}
+
+.dts__tyre.is-missing .dts__tyre-edge {
+  stroke: rgba(138, 149, 166, 0.5);
+  stroke-dasharray: 10 10;
+}
+
+.dts__tyre.is-slip .dts__tyre-edge {
+  stroke: var(--warn);
+  stroke-width: calc(var(--u) * 1.6px);
+}
+
+.dts__tyre.is-slip-high .dts__tyre-edge {
+  stroke-width: calc(var(--u) * 2.4px);
+}
+
+/* Торможение колеса: красная резина с красноватыми ламелями и кромкой. Селектор с .dts
+   сильнее правил пробуксовки и «нет скорости» — красный не перебивается янтарём/серым. */
+.dts__tyre-brake {
+  transition: opacity 0.18s ease-out;
+}
+
+.dts .dts__tyre.is-brake .dts__tread-lug {
+  stroke: rgba(255, 196, 190, 0.66);
+}
+
+.dts .dts__tyre.is-brake .dts__tyre-edge {
+  stroke: var(--red);
+  stroke-width: calc(var(--u) * 2.4px);
+  stroke-dasharray: none;
+}
+
+.dts__tyre-brake-glow {
+  fill: none;
+  stroke: rgba(239, 43, 45, 0.4);
+  stroke-width: calc(var(--u) * 9px);
+}
+
+/* Буксует + тормоз: базовая красная резина приглушена до тёмно-красного, яркий слой
+   .dts__tyre-blink пульсирует по общей rAF-фазе --ph-blink (без CSS-анимаций и переходов —
+   в паузе фаза стоит вместе с симуляцией). Кромка остаётся ровной красной. */
+.dts .dts__tyre.is-blink .dts__tyre-brake {
+  opacity: 0.62;
+}
+
+.dts__tyre-blink {
+  transition: none;
+}
+
+.dts__brake {
+  stroke: var(--red);
+  stroke-width: calc(var(--u) * 4.5px);
+}
+
+.dts__brake-glow {
+  stroke: rgba(239, 43, 45, 0.35);
+  stroke-width: calc(var(--u) * 14px);
+}
+
+.dts__brake-missing {
+  stroke: rgba(138, 149, 166, 0.55);
+  stroke-width: calc(var(--u) * 1.5px);
+  stroke-dasharray: 10 12;
+}
+
+/* Подвеска: пружина на месте стойки. Длиннее силуэта — выше нормы (циан),
+   короче — ниже (янтарь); растягивается от верхней опоры. */
+.dts__coil-ghost,
+.dts__coil,
+.dts__coil-glow,
+.dts__coil-cap {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dts__coil-ghost {
+  stroke: rgba(226, 236, 248, 0.28);
+  stroke-width: calc(var(--u) * 1px);
+}
+
+.dts__coil-stretch {
+  transform-origin: 50% 0;
+  transition: transform 0.18s ease-out;
+}
+
+.dts__coil {
+  stroke-width: calc(var(--u) * 2.4px);
+}
+
+.dts__coil-glow {
+  stroke-width: calc(var(--u) * 7px);
+  stroke-opacity: 0.3;
+}
+
+.dts__coil-cap {
+  stroke: rgba(236, 243, 250, 0.85);
+  stroke-width: calc(var(--u) * 2.2px);
+}
+
+.dts__coil-cap.is-moving {
+  transition: transform 0.18s ease-out;
+}
+
+.dts__strut.is-up :is(.dts__coil, .dts__coil-glow) {
+  stroke: var(--cold);
+}
+
+.dts__strut.is-down :is(.dts__coil, .dts__coil-glow) {
+  stroke: var(--warn);
+}
+
+/* Нет данных — тихий серый пунктир, отличимый от «ноль». */
+.dts .is-missing :is(.dts__coil-ghost, .dts__track) {
+  stroke: rgba(138, 149, 166, 0.55);
+  stroke-width: calc(var(--u) * 1.5px);
+  stroke-dasharray: 8 8;
+}
+
+.dts .is-lock-missing .dts__diff-track {
+  stroke: rgba(138, 149, 166, 0.5);
+  stroke-width: calc(var(--u) * 1.5px);
+  stroke-dasharray: 14 16;
+}
+
+/* Пауза: никаких независимых интерполяций и декоративных циклов. */
+.dts.is-paused *,
+.attitude.is-paused * {
+  transition: none !important;
+  animation: none !important;
+}
+
+.dts__leader {
+  stroke: rgba(244, 247, 251, 0.38);
+  stroke-width: 2.5;
+}
+
+.dts__leader-dot {
+  fill: var(--text);
+}
+
+.dts__callout-label {
+  fill: var(--dim);
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dts__callout-value {
+  fill: var(--text);
+  font-size: 62px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.dts__callout.is-missing .dts__callout-value {
+  fill: var(--warn);
+  font-size: 50px;
+}
+
+.dts__callout.is-missing .dts__leader {
+  stroke-dasharray: 8 10;
+}
+
+.dts__wheel {
+  font-size: 56px;
+}
+
+.dts__wheel-ru {
+  fill: var(--text);
+  font-weight: 700;
+}
+
+.dts__wheel-code {
+  fill: var(--dim);
+  font-size: 42px;
+}
+
+.dts__legend-text {
+  fill: var(--dim);
+  font-size: 38px;
+}
+
+.dts__legend-flow,
+.dts__legend-slip,
+.dts__legend-brake {
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.dts__legend-flow {
+  stroke: var(--cold);
+}
+
+.dts__legend-slip {
+  stroke: var(--warn);
+}
+
+.dts__legend-brake {
+  stroke: var(--red);
+}
+
+.dts__lost {
+  fill: var(--warn);
+  font-size: 72px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(4, 6, 10, 0.85);
+  stroke-width: 14px;
+}
+
+/* ---------------- Вид сверху ---------------- */
+
+/* Общий рендер topdown-schematic-v2.png (единицы — его пиксели 887×1774). Оверлеи шин
+   по умолчанию прозрачны и проявляются только состоянием; толщины — в экранных пикселях
+   (vector-effect: non-scaling-stroke). */
+.topcar__img {
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.5));
+}
+
+.topcar--ghost .topcar__img {
+  opacity: 0.86;
+}
+
+.topcar__tyre {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 1.5;
+}
+
+.topcar__tyre.is-known {
+  stroke: rgba(190, 215, 240, 0.22);
+}
+
+.topcar__front {
+  fill: var(--ice);
+}
+
+.topcar__front-label {
+  fill: var(--ice);
+  font-size: 38px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.topcar__label {
+  font-size: 54px;
+}
+
+.topcar__label-ru {
+  fill: var(--text);
+  font-weight: 700;
+}
+
+.topcar__label-code {
+  fill: var(--dim);
+  font-size: 42px;
+}
+
+.topcar__tyre.slip-1 {
+  fill: rgba(129, 196, 255, 0.22);
+}
+
+.topcar__tyre.slip-2 {
+  fill: rgba(255, 176, 32, 0.35);
+}
+
+.topcar__tyre.slip-3 {
+  fill: rgba(255, 176, 32, 0.6);
+}
+
+.topcar__tyre.is-missing {
+  fill: rgba(4, 6, 10, 0.45);
+  stroke: var(--tick);
+  stroke-dasharray: 5 4;
+}
+
+.topcar__tyre.is-braking {
+  stroke: var(--warn);
+  stroke-width: 3;
+}
+
+/* ---------------- Сцепление ---------------- */
+
+.traction,
+.suspension {
+  display: grid;
+  height: 100%;
+  min-height: 380px;
+  gap: var(--gap);
+}
+
+.traction {
+  grid-template-columns: minmax(290px, 24%) minmax(0, 1fr) minmax(260px, 21%);
+}
+
+.traction__split .panel__body {
+  justify-content: space-between;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.split__rear {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.split__rear .readout__value {
+  justify-content: flex-end;
+}
+
+.splitbar {
+  display: flex;
+  height: 10px;
+  background: var(--track);
+}
+
+.splitbar.is-empty {
+  background: repeating-linear-gradient(135deg, var(--track) 0 4px, transparent 4px 8px);
+}
+
+.splitbar__front {
+  background: var(--ice);
+  transition: width 0.12s linear;
+}
+
+.splitbar__rear {
+  flex: 1;
+  margin-left: 2px;
+  background: var(--m-blue);
+}
+
+.split__torque {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.6vh, 16px);
+}
+
+.traction__wheels,
+.suspension__corners {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 0.7fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-areas:
+    'fl car fr'
+    'rl car rr'
+    'note note note';
+  gap: var(--gap);
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Подвеска: колонка схемы шире — рендер вида сверху крупнее. */
+.suspension__corners {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.95fr) minmax(0, 1fr);
+}
+
+.traction__car,
+.suspension__car,
+.tyres__car {
+  grid-area: car;
+  position: relative;
+  min-height: 0;
+}
+
+.traction__car > .dts,
+.traction__car > .topcar,
+.suspension__car > .topcar,
+.tyres__car > .topcar {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.traction__note {
+  grid-area: note;
+  margin: 0;
+  font-size: var(--fs-hint);
+  color: var(--dim);
+  text-align: center;
+}
+
+.wheelcard--fl,
+.corner--fl,
+.tyre--fl {
+  grid-area: fl;
+}
+
+.wheelcard--fr,
+.corner--fr,
+.tyre--fr {
+  grid-area: fr;
+}
+
+.wheelcard--rl,
+.corner--rl,
+.tyre--rl {
+  grid-area: rl;
+}
+
+.wheelcard--rr,
+.corner--rr,
+.tyre--rr {
+  grid-area: rr;
+}
+
+.wheelcard,
+.corner {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: clamp(6px, 1.2vh, 12px);
+  min-height: 0;
+  min-width: 0;
+  padding: clamp(8px, 1.4vh, 14px) clamp(10px, 1vw, 16px);
+  background: var(--panel);
+  border-top: 1px solid var(--panel-line);
+}
+
+.wheelcard--fl,
+.wheelcard--rl,
+.corner--fl,
+.corner--rl {
+  box-shadow: inset -2px 0 0 var(--hair);
+}
+
+.wheelcard--fr,
+.wheelcard--rr,
+.corner--fr,
+.corner--rr {
+  box-shadow: inset 2px 0 0 var(--hair);
+}
+
+.wheelcard.is-braking {
+  box-shadow: inset 0 3px 0 var(--warn);
+}
+
+.wheelcard__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.wheelcard__short {
+  font-size: clamp(18px, 3.2vh, 26px);
+  font-weight: 700;
+}
+
+.wheelcard__name {
+  font-size: var(--fs-label);
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wheelcard__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.wheelcard__brake {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px 10px;
+  padding-top: clamp(4px, 1vh, 8px);
+  border-top: 1px solid var(--hair);
+  font-size: var(--fs-label);
+}
+
+.wheelcard__brake-label {
+  color: var(--dim);
+}
+
+.wheelcard__brake-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.brake-mark {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--tick);
+  border-radius: 50%;
+}
+
+.wheelcard__brake-value.is-on {
+  color: var(--warn);
+}
+
+.wheelcard__brake-value.is-on .brake-mark {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+
+.traction__side,
+.systems__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+.traction__side > .panel:last-child {
+  flex: 1;
+}
+
+.wheelmax {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.wheelmax__title {
+  flex-basis: 100%;
+  color: var(--dim);
+}
+
+.wheelmax__item b {
+  color: var(--dim);
+  font-weight: 600;
+}
+
+/* ---------------- Подвеска ---------------- */
+
+.suspension {
+  grid-template-columns: minmax(250px, 19%) minmax(0, 1fr) minmax(270px, 22%);
+}
+
+.corner__body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+}
+
+.vgauge {
+  position: relative;
+  flex: none;
+  width: 14px;
+  height: clamp(54px, 15vh, 130px);
+  background: var(--track);
+}
+
+.vgauge.is-empty {
+  background: repeating-linear-gradient(135deg, var(--track) 0 4px, transparent 4px 8px);
+}
+
+.vgauge__zero {
+  position: absolute;
+  left: -5px;
+  right: -5px;
+  top: 50%;
+  height: 1px;
+  background: var(--text);
+}
+
+.vgauge__fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--ice);
+  transition: height 0.12s linear;
+}
+
+.vgauge__fill.is-up {
+  bottom: 50%;
+}
+
+.vgauge__fill.is-down {
+  top: 50%;
+  background: #b9c4d4;
+}
+
+.hmark {
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+.hmark__base {
+  fill: rgba(4, 6, 10, 0.55);
+}
+
+.hmark.is-up,
+.hmark__dot.is-up {
+  stroke: var(--ice);
+  fill: var(--ice);
+}
+
+.hmark.is-down,
+.hmark__dot.is-down {
+  stroke: #b9c4d4;
+  fill: #b9c4d4;
+}
+
+.hmark__zero {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.hmark--missing {
+  fill: none;
+  stroke: var(--tick);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+
+.deltas {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1.2vh, 12px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.deltas__row {
+  padding-bottom: clamp(4px, 0.9vh, 8px);
+  border-bottom: 1px solid var(--hair);
+}
+
+.deltas__row--session {
+  border-bottom: 0;
+}
+
+/* ---------------- Системы ---------------- */
+
+.systems {
+  display: grid;
+  height: 100%;
+  min-height: 380px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1.15fr) minmax(0, 0.9fr);
+  gap: var(--gap);
+}
+
+.systems__power .panel__body {
+  justify-content: space-between;
+}
+
+.gear .readout__num {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.systems__temps {
+  flex: 1;
+}
+
+.systems__temps .panel__body {
+  justify-content: space-around;
+}
+
+.assists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(8px, 1.4vh, 14px) 14px;
+}
+
+.tyres {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  /* Центральная колонка — под крупный рендер; подписи TPMS остаются в своих колонках. */
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 1.2fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    'fl car fr'
+    'rl car rr';
+  gap: clamp(6px, 0.8vw, 12px);
+}
+
+.tyre {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tyre--fl,
+.tyre--rl {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.tyre__head {
+  font-size: var(--fs-label);
+  color: var(--dim);
+}
+
+.tyre__head b {
+  color: var(--text);
+  font-size: clamp(15px, 2.4vh, 19px);
+}
+
+.tyre__val {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tyre--fl .tyre__val,
+.tyre--rl .tyre__val {
+  justify-content: flex-end;
+}
+
+.tyre__label {
+  flex-basis: 100%;
+  font-size: var(--fs-hint);
+  color: var(--dim);
+}
+
+.tyre__num {
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.tyre__num--sm {
+  font-size: var(--fs-sm);
+}
+
+.tyre__unit {
+  font-size: var(--fs-hint);
+  color: var(--dim);
+}
+
+.systems__dyn .panel__body {
+  align-items: stretch;
+}
+
+.gplot {
+  align-self: center;
+  width: clamp(90px, 22vh, 190px);
+  height: clamp(90px, 22vh, 190px);
+}
+
+.gplot__ring {
+  fill: none;
+  stroke: var(--tick);
+}
+
+.gplot__ring--inner {
+  stroke-dasharray: 3 4;
+}
+
+.gplot__axis {
+  stroke: var(--hair);
+}
+
+.gplot__num {
+  fill: var(--dim);
+  font-size: 12px;
+}
+
+.gplot__dot {
+  fill: var(--ice);
+}
+
+/* ---------------- Демо-панель ---------------- */
+
+.demobar {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1vw, 16px);
+  min-height: var(--bar-h);
+  padding: 4px var(--pad);
+  background: var(--bg-2);
+  border-top: 1px dashed rgba(255, 176, 32, 0.4);
+  font-size: clamp(12px, 1.9vh, 14px);
+}
+
+.demobar__title {
+  color: var(--warn);
+  font-weight: 700;
+  font-size: clamp(11px, 1.7vh, 13px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.demobar__select,
+.demobar__btn {
+  height: clamp(28px, 4.6vh, 34px);
+  padding: 0 12px;
+  background: #11161e;
+  border: 1px solid #2c3441;
+  border-radius: 2px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.demobar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.demobar__select:hover,
+.demobar__btn:hover {
+  border-color: var(--dim);
+}
+
+.demobar__icon {
+  width: 10px;
+  height: 10px;
+}
+
+.demobar__icon.is-pause {
+  border-left: 3px solid currentColor;
+  border-right: 3px solid currentColor;
+}
+
+.demobar__icon.is-play {
+  width: 0;
+  height: 0;
+  border-left: 9px solid currentColor;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+
+.demobar__desc {
+  flex: 1;
+  min-width: 0;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.demobar__time {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.demobar__time b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.demobar__state {
+  padding: 0 6px;
+  border: 1px solid var(--tick);
+  font-size: 11px;
+}
+
+.demobar__state.is-paused {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+/* ---------------- Адаптивность ---------------- */
+
+/* Невысокие широкие экраны (1600×520, 1280×480): плотнее. */
+@media (min-width: 1181px) and (max-height: 620px) {
+  .level__scale {
+    margin-top: 6px;
+  }
+
+  .level__note,
+  .traction__note {
+    display: none;
+  }
+
+  .suspension__corners,
+  .traction__wheels {
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  /* Прибор крена/тангажа — слева во всю высоту карточки, число — справа. */
+  .attitude {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .attitude__dial {
+    align-self: stretch;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .attitude__readout .readout__num {
+    font-size: min(var(--fs-xl), 12cqi);
+  }
+
+  /* Температуры: максимум сессии — в строку с подписью, шкала вплотную к числу,
+     чтобы три строки помещались в панель при 1280×480. */
+  .temprow .readout {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'label hint'
+      'value value'
+      'bar bar';
+    align-items: baseline;
+    column-gap: 10px;
+    row-gap: 3px;
+  }
+
+  .temprow .readout__label {
+    grid-area: label;
+  }
+
+  .temprow .readout__hint {
+    grid-area: hint;
+    justify-content: flex-end;
+    text-align: right;
+    line-height: 1.2;
+  }
+
+  .temprow .readout__value {
+    grid-area: value;
+  }
+
+  .temprow .bar {
+    grid-area: bar;
+    height: 5px;
+    margin-top: 2px;
+  }
+}
+
+/* Однострочная шапка на промежуточной ширине (1280×720): шрифты вкладок растут с высотой,
+   поэтому ужимаем второстепенное — поля вкладок, разрядку, зазор бейджа и подпись часов. */
+@media (min-width: 1181px) and (max-width: 1440px) {
+  .tab {
+    padding: 0 clamp(10px, 1.3vw, 34px);
+    letter-spacing: 0.07em;
+  }
+
+  .header__right {
+    gap: 12px;
+  }
+
+  .header__clock-label {
+    display: none;
+  }
+}
+
+/* Средняя ширина: колонки складываются, страница прокручивается. */
+@media (max-width: 1180px) {
+  .app {
+    height: auto;
+    min-height: 100dvh;
+    grid-template-rows: auto auto auto;
+  }
+
+  .main {
+    overflow: visible;
+  }
+
+  .screen,
+  .terrain,
+  .traction,
+  .suspension,
+  .systems {
+    height: auto;
+  }
+
+  :root {
+    --fs-xl: clamp(36px, 5.4vw, 56px);
+    --fs-lg: clamp(28px, 4.2vw, 42px);
+    --fs-md: clamp(22px, 3vw, 30px);
+    --fs-sm: clamp(18px, 2.4vw, 22px);
+    --fs-label: 13px;
+    --fs-hint: 12px;
+    --header-h: auto;
+  }
+
+  .header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'brand right'
+      'tabs tabs';
+    row-gap: 0;
+    padding-top: 8px;
+  }
+
+  .header__brand {
+    grid-area: brand;
+  }
+
+  .header__right {
+    grid-area: right;
+  }
+
+  .tabs {
+    grid-area: tabs;
+    height: 48px;
+    margin: 6px calc(-1 * var(--pad)) 0;
+    border-top: 1px solid var(--hair);
+  }
+
+  .tab {
+    flex: 1;
+    padding: 0 8px;
+  }
+
+  .tab:first-child {
+    border-left: 0;
+  }
+
+  /* Поток вместо дашборда: строки и стопки карточек — по содержимому, без нулевых flex-основ,
+     иначе inline-size контейнеры (.attitude, .level--compact) схлопываются в 30–40px оболочки. */
+  .terrain {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-auto-rows: auto;
+    grid-template-areas:
+      'stage stage'
+      'att side'
+      'strip strip';
+  }
+
+  .terrain__attitude,
+  .terrain__side {
+    min-height: auto;
+    min-width: 0;
+  }
+
+  .terrain__attitude > .panel,
+  .terrain__side > .panel,
+  .terrain__attitude > .panel > .panel__body,
+  .terrain__side > .panel > .panel__body {
+    flex: none;
+    min-height: auto;
+  }
+
+  .terrain__stage .dts {
+    flex: none;
+    aspect-ratio: 2402 / 1402;
+  }
+
+  .terrain__strip {
+    flex-direction: column;
+  }
+
+  .strip__group {
+    flex-wrap: wrap;
+  }
+
+  .attitude {
+    flex: none;
+  }
+
+  /* Круглый прибор: квадратная коробка по ширине (не больше 300px), meet — круг без овала. */
+  .attitude__dial {
+    flex: none;
+    height: auto;
+    aspect-ratio: 1;
+    max-height: 300px;
+  }
+
+  .traction {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      'wheels wheels'
+      'split side';
+  }
+
+  .traction__wheels {
+    grid-area: wheels;
+  }
+
+  .traction__split {
+    grid-area: split;
+  }
+
+  .traction__side {
+    grid-area: side;
+  }
+
+  .traction__wheels,
+  .suspension__corners {
+    grid-template-rows: auto auto auto;
+  }
+
+  .traction__car,
+  .suspension__car {
+    min-height: 300px;
+  }
+
+  .suspension {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      'corners corners'
+      'level deltas';
+  }
+
+  .suspension__corners {
+    grid-area: corners;
+  }
+
+  .suspension__level {
+    grid-area: level;
+  }
+
+  .suspension__deltas {
+    grid-area: deltas;
+  }
+
+  .systems {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .tyres__car {
+    min-height: 300px;
+  }
+
+  .gplot {
+    width: 160px;
+    height: 160px;
+  }
+
+  .vgauge {
+    height: 110px;
+  }
+
+  .demobar {
+    flex-wrap: wrap;
+    padding: 8px var(--pad);
+  }
+
+  .demobar__desc {
+    flex-basis: 100%;
+    order: 10;
+    white-space: normal;
+  }
+}
+
+/* Телефон: одна колонка. */
+@media (max-width: 760px) {
+  :root {
+    --fs-xl: 46px;
+    --fs-lg: 34px;
+    --fs-md: 26px;
+    --fs-sm: 20px;
+    --pad: 12px;
+  }
+
+  .header__subtitle {
+    display: none;
+  }
+
+  .header__clock {
+    display: none;
+  }
+
+  /* Название и бейдж — отдельными строками, вкладки — третьей. */
+  .header {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'brand'
+      'right'
+      'tabs';
+    row-gap: 6px;
+  }
+
+  .header__right {
+    grid-area: right;
+    justify-content: flex-start;
+  }
+
+  .header__title {
+    white-space: normal;
+  }
+
+  .demo-badge {
+    flex: 0 1 auto;
+    font-size: 11px;
+    padding: 4px 7px;
+    white-space: normal;
+  }
+
+  /* Четыре вкладки помещаются в 375px; если нет — полоса прокручивается, подписи не режутся. */
+  .tabs {
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .tab {
+    flex: 1 0 auto;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    padding: 0 6px;
+  }
+
+  .terrain,
+  .suspension,
+  .systems {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terrain {
+    grid-template-areas:
+      'stage'
+      'att'
+      'side'
+      'strip';
+  }
+
+  .strip__group {
+    gap: 14px 22px;
+  }
+
+  .strip__caption {
+    writing-mode: horizontal-tb;
+    transform: none;
+    flex-basis: 100%;
+    border-left: 0;
+    padding-left: 0;
+    text-align: left;
+  }
+
+  .traction {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'wheels'
+      'split'
+      'side';
+  }
+
+  .traction__wheels,
+  .suspension__corners {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'fl fr'
+      'car car'
+      'rl rr'
+      'note note';
+  }
+
+  .wheelcard__row {
+    grid-template-columns: 1fr;
+  }
+
+  .traction__car,
+  .suspension__car {
+    min-height: 260px;
+  }
+
+  .suspension {
+    grid-template-areas:
+      'corners'
+      'level'
+      'deltas';
+  }
+
+  .vgauge {
+    height: 80px;
+  }
+
+  .demobar__time {
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

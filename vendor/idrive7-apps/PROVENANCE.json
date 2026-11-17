@@ -1,0 +1,338 @@
+{
+  "source": {
+    "repository": "https://github.com/cauliflowermossgrape/idrive7-apps",
+    "commit": "082d42d52cfaa654c1a9740e6736cbd9433c486d",
+    "license": "MIT",
+    "licenseFile": "LICENSE"
+  },
+  "policy": "Curated MIT subset: kit runtime, the app builder and the files a Russian (ru) build reads. Not included: GPL parts (kit/renderd, kit/emu, Doom), BMW oap-sdk, deployment scripts, prebuilt binaries, tests, caches, other apps, diagnostic catalogs, Barlow (removed by the builder for this app).",
+  "excluded": [
+    "kit/runtime/fonts/gear_barlow.json",
+    "kit/runtime/fonts/OFL-Barlow.txt"
+  ],
+  "files": [
+    {
+      "path": "LICENSE",
+      "status": "unchanged",
+      "sha256": "7c813412dcaf1b9d18c28ca6b6199c4349e15e35beca44ab6cab8e4413fe0aa6",
+      "upstreamBlob": "e9b4f0ac353e8c9d8537426f7bcaf03e3201224a"
+    },
+    {
+      "path": "kit/localization/credit.ru.json",
+      "status": "unchanged",
+      "sha256": "656d45a268efe4ae518b331a15b31a7194264b027466b416a77cfbf412fb86b2",
+      "upstreamBlob": "2d57545279ab9c24f98bd624aadcaa448f307293"
+    },
+    {
+      "path": "kit/localization/fonts/cyrillic-ru.json",
+      "status": "unchanged",
+      "sha256": "c847f70baaa6b2f12df1e5acebab0227d97f46c76a09248e66b57ae5686d5758",
+      "upstreamBlob": "928b72ba6faae3c64e8509ebe13ddc41d735dded"
+    },
+    {
+      "path": "kit/platform/permissions.json",
+      "status": "unchanged",
+      "sha256": "a03a2d7be452e89f9ce5361820361dded34ef36aa1e4a5afda95a4a1b1e26b01",
+      "upstreamBlob": "2366a03ba84260a515583a7aa1acd3085de06ebd"
+    },
+    {
+      "path": "kit/runtime/LICENSE",
+      "status": "added",
+      "sha256": "7c813412dcaf1b9d18c28ca6b6199c4349e15e35beca44ab6cab8e4413fe0aa6",
+      "from": "upstream LICENSE",
+      "summary": "the upstream MIT LICENSE, verbatim, so the runtime copied into packages (javascript/kit/) carries its notice"
+    },
+    {
+      "path": "kit/runtime/canvas.js",
+      "status": "unchanged",
+      "sha256": "2d1d9e950700fb465af9fa7f10103a2fd22b516b3c853cf5625012cf31fe5ab3",
+      "upstreamBlob": "45aa3751509ac4ae278ee2f7856679ac46c7caab"
+    },
+    {
+      "path": "kit/runtime/car.js",
+      "status": "unchanged",
+      "sha256": "b87770e43018cb56368812ff9e820351d907639dc807ee1429747d34c1aca731",
+      "upstreamBlob": "5fdc33ee7df5db048c6bb311f7285bebc360e984"
+    },
+    {
+      "path": "kit/runtime/credits.js",
+      "status": "unchanged",
+      "sha256": "6074066bc6ae85794db9b844322264ad8aa73b89c850f6b03a3ee57c57d95084",
+      "upstreamBlob": "fcd5ae8fda783f396ced830905b1babe864e184c"
+    },
+    {
+      "path": "kit/runtime/diag.js",
+      "status": "unchanged",
+      "sha256": "337bec1fed75f5216de2a3ef1fbe5cbb1e183b152a8071142a1009441bcd7cba",
+      "upstreamBlob": "a28e1bfe8f3d11ecec2190ffc4394b833a75aa28"
+    },
+    {
+      "path": "kit/runtime/dids.js",
+      "status": "unchanged",
+      "sha256": "cf6ae106099e64863a7806ad1db36cdd24f161c03a4d97fba1aa2d5b630c73f4",
+      "upstreamBlob": "43509608eaf654be64179cf21e2e3a33af15e2ad"
+    },
+    {
+      "path": "kit/runtime/display.js",
+      "status": "unchanged",
+      "sha256": "4ae710fb0fdac75b871c4415ed99a5c926528d823c0dce056c0e5da3837cc158",
+      "upstreamBlob": "3f68b12ceaea688aa373c564fa90810f552f9832"
+    },
+    {
+      "path": "kit/runtime/ecus.js",
+      "status": "unchanged",
+      "sha256": "f5ec3dbdece067f7eaa0080479dfde0d25b8a882f657df8b6f58f46f8622e149",
+      "upstreamBlob": "2c8a55c93f8b9d8bf8d84555e63e68467d75f901"
+    },
+    {
+      "path": "kit/runtime/engine.js",
+      "status": "unchanged",
+      "sha256": "de6c7a05d041ec44743f46df1d442eaa43404d8f266a0e4e8a8ea3a8dc5fb88a",
+      "upstreamBlob": "8bb3e94b512038873a1ee4d804567492cb4dba32"
+    },
+    {
+      "path": "kit/runtime/fonts.js",
+      "status": "unchanged",
+      "sha256": "d402329020befccbc81a2b50b663a7a358e6e70e9520735f61283296e690d303",
+      "upstreamBlob": "6ceff170c9aeaeae496c8dc223dc32ed5f90baee"
+    },
+    {
+      "path": "kit/runtime/fonts/OFL-NotoSansSC.txt",
+      "status": "unchanged",
+      "sha256": "babcfe66c8a098b2fa279bc724a3a342f8124f77ce18941fbcc1bbb39823cded",
+      "upstreamBlob": "79a917be1f4b42e688a75c35f372b83a0f4ba11c"
+    },
+    {
+      "path": "kit/runtime/fonts/UFL-Ubuntu.txt",
+      "status": "added",
+      "sha256": "ead8609587f9c0560a8ed4c3834798b56bcbb0949a60ece62b7613ddd09f8e32",
+      "from": "this project: licenses/UBUNTU_FONT_LICENCE.txt",
+      "summary": "Ubuntu Font Licence 1.0 for the atlases baked from the Ubuntu font (label, bold, num, light, gear, cyrillic)"
+    },
+    {
+      "path": "kit/runtime/fonts/bold.json",
+      "status": "unchanged",
+      "sha256": "c8185d6874a4ca1f79ffc2b73434d40426381b4bbf395f6f49733bd7020d7e76",
+      "upstreamBlob": "1e51dccb6bd42d9b644a1c6a6c7407b76a95c3c2"
+    },
+    {
+      "path": "kit/runtime/fonts/cjk.json",
+      "status": "unchanged",
+      "sha256": "dfd5484d32c3c133e15be35c0d211b53d14836c311c6306a2aa6e8ea962c0673",
+      "upstreamBlob": "2780fbe483e3efcfccf27feea63c53e4698dd260"
+    },
+    {
+      "path": "kit/runtime/fonts/gear.json",
+      "status": "unchanged",
+      "sha256": "d449f2afa02529e244a2499d294beb6ce20c887a56cb7ce8c9cf296413c6f592",
+      "upstreamBlob": "8d5065dd63d1a521800ab65e414cfd1f43f39e88"
+    },
+    {
+      "path": "kit/runtime/fonts/label.json",
+      "status": "unchanged",
+      "sha256": "4dd985232ef36675f30ec855e8c4d5e6db5d44c8a0e04d82d50adc56c9eaf4cf",
+      "upstreamBlob": "9d54f1c5d90cfe92510b83800a8d818173c05cfa"
+    },
+    {
+      "path": "kit/runtime/fonts/light.json",
+      "status": "unchanged",
+      "sha256": "961ac19e874ed013c4cdfaaf009e85977e47889cbf3d470901f3d33b4bf4e0df",
+      "upstreamBlob": "064074b56160e8d4ebc1b9a48eff4aad7b08405b"
+    },
+    {
+      "path": "kit/runtime/fonts/num.json",
+      "status": "unchanged",
+      "sha256": "02a02e0c8e8da9c7bed35d66fce8c993998adf93080050e47511b602dbbcf9fc",
+      "upstreamBlob": "f0717c5762c5cbeeffba231fe80af8cef008e231"
+    },
+    {
+      "path": "kit/runtime/gauges.js",
+      "status": "unchanged",
+      "sha256": "3b0d56a3f2b57fc7e7698cb6a93a705a4ef0017205f2d0d8848cda20ec87ef06",
+      "upstreamBlob": "040ab86080dfbcad94a535b319ef846a36430031"
+    },
+    {
+      "path": "kit/runtime/hmi-text.js",
+      "status": "unchanged",
+      "sha256": "74d96fd26ec53f4dc55fd36e079901ed03994794c8b31ae37e93e095092814e0",
+      "upstreamBlob": "b9749cf0e65bff9401896fd2697ae0a585412ec0"
+    },
+    {
+      "path": "kit/runtime/hud_claim.js",
+      "status": "unchanged",
+      "sha256": "02eb68db41e97662c972af90b30fe6d02d8e1d23e29e96250a093c3dcb7b33df",
+      "upstreamBlob": "08736a1cb8565fb1cf34ae0b95d85c80a316c848"
+    },
+    {
+      "path": "kit/runtime/i18n.js",
+      "status": "unchanged",
+      "sha256": "0600bbd7946fc5cda8155702c63d0a2c9c4422541daca4d353b52fe95a0b7768",
+      "upstreamBlob": "40d518587d03f534ac72a1e1bccec219bc04c4ff"
+    },
+    {
+      "path": "kit/runtime/locale.json",
+      "status": "unchanged",
+      "sha256": "c37863ed4336c34a3868d150767644841256ee3ad6fc3dad6e223bcb5913f7e7",
+      "upstreamBlob": "8a931d7bff57874e400f1da635d6d647cd13dbb2"
+    },
+    {
+      "path": "kit/runtime/locales/ko.json",
+      "status": "unchanged",
+      "sha256": "6b098ea894601b06d8f8ac53c2e31b457af33e0c75b2f25417bc5b7e21471cb5",
+      "upstreamBlob": "af1645bd7f2bc3ef85fbeea1379a778b9e10ba6a"
+    },
+    {
+      "path": "kit/runtime/locales/ko.tsv",
+      "status": "unchanged",
+      "sha256": "b3524c8a6e8362099b6e4a47d7471a8d5a6b929b33aaa66e61624075a3a08686",
+      "upstreamBlob": "a3cfb714c1feda5aa780cd1cc3a0bfbc254eb201"
+    },
+    {
+      "path": "kit/runtime/locales/ru.json",
+      "status": "unchanged",
+      "sha256": "01c59e3cefc64bceb167f118c2c608ce152816a113ef5491d7e27c31c7b6c8fe",
+      "upstreamBlob": "008d27e05054493234820bbb92b3729606ad3102"
+    },
+    {
+      "path": "kit/runtime/locales/ru.tsv",
+      "status": "unchanged",
+      "sha256": "0659f0a56dcc1945bfcaea9f367b1315337fba117373c5332414ceeb0e348925",
+      "upstreamBlob": "007daf5a853192b85e3e340f5cd30fc61b469ea2"
+    },
+    {
+      "path": "kit/runtime/locales/zh-CN.json",
+      "status": "unchanged",
+      "sha256": "8af9b3629f948099cd31020d5c6e59b69c6a38e57a0f6fbd882b1578550ca441",
+      "upstreamBlob": "ea54590a924d84d2a3102647ca12d62da09ee48e"
+    },
+    {
+      "path": "kit/runtime/locales/zh-CN.tsv",
+      "status": "unchanged",
+      "sha256": "6ee2b9c5212f2bb7c791a0f5f1f10f42b17a01c08679f4b19940631f246c3abb",
+      "upstreamBlob": "90a077256da70c687d8ed8e76d7fced2581a1c2a"
+    },
+    {
+      "path": "kit/runtime/mgu.js",
+      "status": "unchanged",
+      "sha256": "c34e81aa7c6d33e08edc78ab275c7672038b9ac37f0fd5366773188cd07f834e",
+      "upstreamBlob": "bf10093986109d3936650311d47c1ae422be533e"
+    },
+    {
+      "path": "kit/runtime/pack.js",
+      "status": "unchanged",
+      "sha256": "25e8270eb6b67045d8d9bbc225f6877dc54f9078036742e5adca687e1cf040c2",
+      "upstreamBlob": "05d7947b7096b70f5cbec827e9a67ac791c328be"
+    },
+    {
+      "path": "kit/runtime/parked.js",
+      "status": "unchanged",
+      "sha256": "43f5517ad9badb0d23a11bb59a9c4501482891a23443861e3f5bdd10d1dcab57",
+      "upstreamBlob": "d7788c1b8d7b6a2face040db09a2964c42c06501"
+    },
+    {
+      "path": "kit/runtime/readonly-diag.js",
+      "status": "unchanged",
+      "sha256": "8882a628ee5ab8040fda02b759beafc134eaa7a973ddd3d6ae5e6b5a8d640059",
+      "upstreamBlob": "98db652f681fc0bca438604beb16b83657f9dec5"
+    },
+    {
+      "path": "kit/runtime/record.js",
+      "status": "unchanged",
+      "sha256": "0fda0a3094c726dc52b7fe9812b586d500806337ca5213c34bfece5606a7e74c",
+      "upstreamBlob": "2c40448f761a2d3c526c764b045dc6d859c07528"
+    },
+    {
+      "path": "kit/runtime/renderd.js",
+      "status": "unchanged",
+      "sha256": "dc26de3883b43ecdd917de66cac470737104b43242c9746cfdc888c5b2f4c183",
+      "upstreamBlob": "21df6040b107dabbbe5593ccc70093b5c2238a0c"
+    },
+    {
+      "path": "kit/runtime/run_timer.js",
+      "status": "unchanged",
+      "sha256": "c168a0999cfdff407896649673e68bc14757749bcdf09da90386f0471183658e",
+      "upstreamBlob": "90fd6c5b86ef6b1de0ca625d64ab9b5f374b04e1"
+    },
+    {
+      "path": "kit/runtime/sgbd.js",
+      "status": "unchanged",
+      "sha256": "799b35e09d558be20fa4fd6bacab0b6fd102fe49aaf34ae81dbadd7fcabfa37e",
+      "upstreamBlob": "c70a3e19c3336a72bfc1999e3875378593880410"
+    },
+    {
+      "path": "kit/runtime/sheet.js",
+      "status": "unchanged",
+      "sha256": "a37334797edad406d716b50766254c2466b5c855aaa6230c3f516cc739931422",
+      "upstreamBlob": "13edd4fb417e6bee0ab015e45e83d91ed073208e"
+    },
+    {
+      "path": "kit/runtime/signals.js",
+      "status": "unchanged",
+      "sha256": "952b0e2c5854dcf7bf4c9b3ab4f86a5a98328daff6c631abc6b60e62f3b67d98",
+      "upstreamBlob": "8bbf3754b3ac767bb7c449600e69ae0f0ef306a0"
+    },
+    {
+      "path": "kit/runtime/sim.js",
+      "status": "unchanged",
+      "sha256": "b7d1ee492c017223e1f0726a69af0d8cff1aa44ae10557e2effae1e3249fa2d9",
+      "upstreamBlob": "00cd1f8b887cf9dd3fb36676a81fd714941fa061"
+    },
+    {
+      "path": "kit/runtime/text-layout.js",
+      "status": "unchanged",
+      "sha256": "0a36ff6e5b4d882a28d0689e0c110f007a53babc1fe9198be822823423d534d6",
+      "upstreamBlob": "6d57a2b95b18b6a10b5e1e59236b2057f2a65f17"
+    },
+    {
+      "path": "kit/runtime/themes.js",
+      "status": "unchanged",
+      "sha256": "c24c641a0e82c4b9bc1ba91ebc2916044de9e160e40d0cf888943fc12d80fa58",
+      "upstreamBlob": "f9ea5b3d2323319f469bc715647a54e3621e2f5e"
+    },
+    {
+      "path": "kit/tools/build.py",
+      "status": "modified",
+      "sha256": "114d77371899e8530d952932cac3779a20c0804f3580a960ae99b3b7f1704e56",
+      "upstreamBlob": "710fd3f2fdecbf25b8d0fb61bf19c7467d117f65",
+      "upstreamSha256": "f02c7b95f5b57670dfb16c34f5a9a63ab8fad4da37a7af95fd10f720dea05d11",
+      "summary": "explicit --store-package mode (SDK-free npm-format .tgz only: no oap-sdk check/copy/folder, no .mgu, no fit to the build machine, x.y.z version required, mguHmi and minimum requires in package.json, deterministic tar entries); icon helper run without a shell"
+    },
+    {
+      "path": "kit/tools/locale-revisions.json",
+      "status": "unchanged",
+      "sha256": "bca9269a5ebda7f4cb17548a2ed6c15da501a640bd7fb1ab4fe3506bbf19feb0",
+      "upstreamBlob": "bb123fc8747d623a2b521414c9251a49cc0d8729"
+    },
+    {
+      "path": "kit/tools/localize.py",
+      "status": "unchanged",
+      "sha256": "12a82009668bb8ae3116acd9a175c60bce916320375d4ea7cfd51b43c3d9b2db",
+      "upstreamBlob": "0dc72160ff6d565728810bd199f2716476b343d1"
+    },
+    {
+      "path": "kit/tools/make_icon.js",
+      "status": "unchanged",
+      "sha256": "9ad2e9ddfd87912eef96ce7ecc6076bea6210021af99b3ae2f05c64010dc9759",
+      "upstreamBlob": "5f7eb7f396a6e1ba2a11af58d794102d3ea25e3a"
+    },
+    {
+      "path": "kit/tools/oapgen/gen.js",
+      "status": "unchanged",
+      "sha256": "03353755765fd356df9b22b5042e5cb2227e057bcc933713b2c16147684bae1a",
+      "upstreamBlob": "4ffe301fc3480bb67eb27b3b2631e84a0dfdce16"
+    },
+    {
+      "path": "kit/tools/pack_data.py",
+      "status": "unchanged",
+      "sha256": "f0795f6170588a11efb2db504bd6cee6fb58a5aefd689d05d926583eff05e0ce",
+      "upstreamBlob": "b38beb442eb4c5d558d57466ebcd4af2227c7d6c"
+    },
+    {
+      "path": "package.json",
+      "status": "added",
+      "sha256": "a51bff776fdd53226e2e67d8f654d17dadfe3decc8bf8bf869cba3aff9813826",
+      "from": "this project: native/scripts/vendor-package.json",
+      "summary": "marks the vendored CommonJS tools/runtime as \"type\": \"commonjs\" (the project root is \"type\": \"module\")"
+    }
+  ]
+}

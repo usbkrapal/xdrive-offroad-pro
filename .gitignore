@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+# Store packaging: the staged app and builder output inside the vendored tree, temporary release folders
+vendor/idrive7-apps/apps/
+vendor/idrive7-apps/dist/
+native/.release-*/
+__pycache__/
+*.pyc
+native/release/

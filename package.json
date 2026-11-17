@@ -1,0 +1,36 @@
+{
+  "name": "terrain-monitor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Terrain Monitor — локальный веб-прототип off-road монитора, только mock-телеметрия",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node scripts/run-tests.mjs",
+    "build:standalone": "npm run build && npm run package:standalone",
+    "package:standalone": "node scripts/package-standalone.mjs",
+    "native:typecheck": "tsc --noEmit -p native/tsconfig.json",
+    "native:test": "node native/scripts/run-tests.mjs",
+    "native:build": "node --import tsx native/scripts/build.ts",
+    "native:stage": "node --import tsx native/scripts/stage.ts",
+    "native:preview": "node --import tsx native/scripts/stage.ts --preview",
+    "native:vendor": "node --import tsx native/scripts/vendor-upstream.ts",
+    "native:package": "npm run native:build && node --import tsx native/scripts/package-store.ts",
+    "native:test:package": "python3 -I native/test/test_store_package.py"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tsx": "^4.23.15",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
+  }
+}
