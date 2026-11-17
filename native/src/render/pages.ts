@@ -9,7 +9,7 @@ import { gearText } from '../../../src/components/displayHelpers';
 import { cameraLayout, type CameraId, type CameraView } from '../../../src/screens/cameraPresentation';
 import type { ImageRegistry, CameraKey } from '../assets/registry';
 import { DIAL_K } from '../assets/spec';
-import { formatDuration, formatNumber, NONE, shownNumber, shownSignal, type Shown } from '../format';
+import { formatDuration, formatNumber, NONE, presentSource, shownNumber, shownSignal, type Shown } from '../format';
 import { asDomain, type NativeState } from '../model/model';
 import type { Layer, Surface } from '../platform/kitTypes';
 import { T } from '../strings';
@@ -39,7 +39,11 @@ const deg = t.units.deg;
 const HEIGHT_RANGE_MM = 120;
 
 const extremum = (e: Extremum | null, d: number, signed = false): Shown => (e === null ? NONE : { text: formatNumber(e.value, d, signed), quality: 'valid', ok: true });
-const sourceLabel = (s: Signal<unknown>) => t.source[s.runtimeSource];
+/** Подпись источника только при наличии значения (presentSource); иначе null. */
+const sourceLabel = (s: Signal<unknown>): string | null => {
+  const src = presentSource(s);
+  return src === null ? null : t.source[src];
+};
 
 /* ============================== Рельеф ============================== */
 
@@ -221,7 +225,12 @@ export function tractionPage(env: PageEnv): void {
   readout(cv, x1 + 16, Y0 + 268, { label: t.traction.rearTorque, shown: shownNumber(s['xdrive.rearTorqueNm'], 0), unit: t.units.nm, size: 'lg' });
   const srcY = Y0 + h - 18;
   const sl = text(cv, t.traction.splitSource, x1 + 16, srcY, 14, C.dim);
-  chip(cv, sourceLabel(s['xdrive.rearPercent']), x1 + 26 + sl, srcY, state.mode === 'demo' ? C.warn : C.cold);
+  const rearSrc = sourceLabel(s['xdrive.rearPercent']);
+  chip(cv, rearSrc ?? t.native.noSource, x1 + 26 + sl, srcY, rearSrc === null ? C.dim : state.mode === 'demo' ? C.warn : C.cold);
+  // передняя доля, выведенная из задней, помечается отдельно, строкой выше (в демо обе — «Демо»)
+  if (rearSrc !== null && presentSource(s['xdrive.frontPercent']) === 'estimated' && presentSource(s['xdrive.rearPercent']) !== 'estimated') {
+    chip(cv, t.native.frontDerived, x1 + 16, srcY - 28, C.dim);
+  }
 
   // Колёса вокруг компактной схемы привода.
   const cw = 320;
@@ -520,7 +529,7 @@ function cameraPlaceholder(cv: Surface, x: number, y: number, w: number, h: numb
 function cameraFrame(env: PageEnv, view: CameraView, x: number, y: number, w: number, h: number, primary: boolean): void {
   const { cv, state } = env;
   if (state.mode !== 'demo') {
-    cameraPlaceholder(cv, x, y, w, h, t.native.cameras.vehicleUnavailable, C.warn);
+    cameraPlaceholder(cv, x, y, w, h, t.native.cameras.vehicleNoFeed, C.dim);
     return;
   }
   if (view.availability === 'simulatedLoss') {
@@ -538,7 +547,7 @@ function cameraFrame(env: PageEnv, view: CameraView, x: number, y: number, w: nu
 function cameraHeader(cv: Surface, x: number, y: number, view: CameraView, demo: boolean): void {
   text(cv, t.cameras.names[view.id], x, y + 20, 17, C.text);
   if (demo) text(cv, view.availability === 'simulatedLoss' ? t.cameras.unavailable : t.cameras.demoLabel, x, y + 40, 13, C.warn);
-  else text(cv, t.cameras.unavailable, x, y + 40, 13, C.warn);
+  else text(cv, t.native.cameras.vehicleStatus, x, y + 40, 13, C.dim);
 }
 
 export function camerasPage(env: PageEnv): void {
@@ -563,10 +572,11 @@ export function camerasPage(env: PageEnv): void {
     cameraFrame(env, v, x2 + 16, iy, CAMERA_THUMB.w, CAMERA_THUMB.h, false);
     const tx = x2 + 16 + CAMERA_THUMB.w + 20;
     cameraHeader(cv, tx, iy - 4, v, demo);
-    if (env.button) env.button(tx, iy + 52, 210, 34, t.native.buttons.showLarge, () => env.selectCamera(v.id), `cam-${v.id}`);
+    // «Показать крупно» — только у демо-снимков: в режиме автомобиля изображения нет ни у одной камеры
+    if (env.button && demo) env.button(tx, iy + 52, 210, 34, t.native.buttons.showLarge, () => env.selectCamera(v.id), `cam-${v.id}`);
     // Пояснение — в нижней части второй панели, по предложениям.
     if (i === layout.secondary.length - 1) {
-      const note = demo ? t.cameras.note : t.native.cameras.vehicleNote;
+      const note = demo ? t.native.cameras.demoNote : t.native.cameras.vehicleNote;
       const parts = note.split('. ');
       parts.forEach((p, k) => text(cv, k < parts.length - 1 ? `${p}.` : p, tx, iy + CAMERA_THUMB.h - (parts.length - 1 - k) * 17, 13, C.dim));
     }

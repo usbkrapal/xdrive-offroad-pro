@@ -1,7 +1,8 @@
 // Тестовые двойники рантайма kit и транспорта SOME/IP.
 
-import { existsSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FieldHandler, GaugesApi, Layer, MguCtx, Surface, Theme, WatchFn, WatchResult } from '../src/platform/kitTypes';
@@ -107,7 +108,8 @@ export function strictSurface(opts: { own?: boolean } = {}): Surface & { counts:
   const counts: Record<string, number> = {};
   const texts: TextCall[] = [];
   const images: number[] = [];
-  const base: Record<string, unknown> = { w: 1600, h: 520, textScale: 1, extra: 0, own: !!opts.own, chrome: null, counts, texts, images };
+  // tabRects: свойство Recorder (G.frame / display.canvas его выставляют); у заглушки G.frame вкладок нет
+  const base: Record<string, unknown> = { w: 1600, h: 520, textScale: 1, extra: 0, own: !!opts.own, chrome: null, tabRects: null, counts, texts, images };
   const finite = (name: string, args: unknown[]) => {
     for (const a of args) if (typeof a === 'number' && !Number.isFinite(a)) throw new Error(`${name}: non-finite argument ${a}`);
   };
@@ -279,4 +281,23 @@ export interface UpstreamDisplay {
 export function loadUpstreamDisplay(): UpstreamDisplay {
   const req = createRequire(join(upstreamRuntime, 'record.js'));
   return { display: req('./display.js'), fonts: req('./fonts.js') };
+}
+
+/* ---------------- вендорный рантайм (то, что уходит в пакет) ---------------- */
+
+export const VENDOR_KIT = join(ROOT, 'vendor', 'idrive7-apps', 'kit');
+
+/**
+ * Копия вендорного kit/runtime, разложенная как её кладёт build.py --language ru (javascript/kit):
+ * кириллический атлас fonts/cyrillic.json и locale.json { language: 'ru', strings }. Каждая копия — свой
+ * каталог, значит и свой кэш модулей: renderd.js прочитает MGU_RENDERD_SOCKET, заданный до kit.req().
+ */
+export function stageVendorKit(): { dir: string; req: NodeRequire; cleanup(): void } {
+  const dir = mkdtempSync(join(tmpdir(), 'xop-kit-'));
+  const kit = join(dir, 'kit');
+  cpSync(join(VENDOR_KIT, 'runtime'), kit, { recursive: true });
+  copyFileSync(join(VENDOR_KIT, 'localization', 'fonts', 'cyrillic-ru.json'), join(kit, 'fonts', 'cyrillic.json'));
+  const strings = JSON.parse(readFileSync(join(kit, 'locales', 'ru.json'), 'utf8')) as Record<string, string>;
+  writeFileSync(join(kit, 'locale.json'), JSON.stringify({ language: 'ru', strings }));
+  return { dir, req: createRequire(join(kit, 'record.js')), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

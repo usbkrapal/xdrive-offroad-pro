@@ -10,13 +10,17 @@ import { nativeRu } from './strings';
 import { manifestSignals } from './vehicle/allowlist';
 
 export const APP_ID = 'xdrive_offroad_pro';
-export const APP_TITLE = 'xDrive Offroad Pro';
+/**
+ * Отображаемое имя — как в веб-шапке: «Terrain Monitor» (подзаголовок «xDrive Offroad Pro» — в шапке экрана).
+ * id, тег журнала и пакет прежние: установленное приложение обновляется на месте.
+ */
+export const APP_TITLE = 'Terrain Monitor';
 /** Свободный 4-символьный тег журнала (upstream: OA1x у BMW, OA93–OA9F у приложений kit). */
 export const LOGGING_ID = 'XOP1';
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.1.1';
 /**
  * Рендерер, установленный у пользователя: компонент MGU Store mgu-render 0.6.21 (его component.json:
- * id "mgu-render", version "0.6.21"). Приложение говорит с ним upstream-диалектом (renderTarget.ts).
+ * id "mgu-render", version "0.6.21"). Приложение говорит с ним диалектом mgu-render/1 (renderTarget.ts, вендорный renderd.js).
  */
 export const REQUIRES = { 'mgu-render': '0.6.21' } as const;
 
@@ -26,7 +30,7 @@ export function buildManifest(): Record<string, unknown> {
   return {
     id: APP_ID,
     title: APP_TITLE,
-    description: 'Офроуд-монитор: рельеф, сцепление, подвеска, системы, камеры. Демо по умолчанию; режим чтения автомобиля — кандидат.',
+    description: 'xDrive Offroad Pro — офроуд-монитор: рельеф, сцепление, подвеска, системы, камеры. Демо по умолчанию; режим чтения автомобиля — кандидат.',
     version: APP_VERSION,
     vendor: 'custom',
     loggingId: LOGGING_ID,

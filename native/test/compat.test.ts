@@ -104,7 +104,7 @@ describe('main.js при загрузке (vm, без Object.fromEntries)', () =
     code = await bundleMain();
   });
 
-  it('upstream-диалект и сокет mgu-render выставлены ДО первого require ./kit/*; каталог сигналов загружается', () => {
+  it('сокет mgu-render выставлен ДО первого require ./kit/*, диалект не навязан (mgu-render/1 kit); каталог сигналов загружается', () => {
     const outer = { proto: process.env.MGU_RENDERD_PROTO, socket: process.env.MGU_RENDERD_SOCKET };
     const r = runBundle(code, {});
     assert.equal(r.fromEntries, 'function', 'полифил установлен в среде без Object.fromEntries');
@@ -114,7 +114,7 @@ describe('main.js при загрузке (vm, без Object.fromEntries)', () =
     assert.ok(r.kitLoads.length >= 3, r.kitLoads.map((k) => k.id).join(','));
     assert.equal(r.kitLoads[0].id, './kit/mgu');
     for (const k of r.kitLoads) {
-      assert.equal(k.env.MGU_RENDERD_PROTO, 'upstream', `${k.id}: диалект`);
+      assert.equal(k.env.MGU_RENDERD_PROTO, undefined, `${k.id}: диалект не задан — kit просит mgu-render/1`);
       assert.equal(k.env.MGU_RENDERD_SOCKET, RENDER_SOCKET, `${k.id}: сокет`);
     }
     assert.equal(RENDER_SOCKET, '/run/mgu-render/render.sock');
@@ -122,13 +122,13 @@ describe('main.js при загрузке (vm, без Object.fromEntries)', () =
     assert.deepEqual({ proto: process.env.MGU_RENDERD_PROTO, socket: process.env.MGU_RENDERD_SOCKET }, outer);
   });
 
-  it('сокет эмулятора, заданный снаружи, сохраняется; диалект всегда upstream; запись в файл не трогается', () => {
-    const emu = runBundle(code, { MGU_RENDERD_SOCKET: '/tmp/xop-emu/render.sock', MGU_RENDERD_PROTO: 'mgu-render/1' });
+  it('сокет эмулятора и явный диалект, заданные снаружи, сохраняются; запись в файл не трогается', () => {
+    const emu = runBundle(code, { MGU_RENDERD_SOCKET: '/tmp/xop-emu/render.sock', MGU_RENDERD_PROTO: 'upstream' });
     assert.equal(emu.kitLoads[0].env.MGU_RENDERD_SOCKET, '/tmp/xop-emu/render.sock');
-    assert.equal(emu.kitLoads[0].env.MGU_RENDERD_PROTO, 'upstream');
+    assert.equal(emu.kitLoads[0].env.MGU_RENDERD_PROTO, 'upstream', 'явный upstream (отладка) остаётся');
     const file = runBundle(code, { MGU_RENDERD_FILE: '/tmp/xop.rd' });
     assert.equal(file.kitLoads[0].env.MGU_RENDERD_FILE, '/tmp/xop.rd');
-    assert.equal(file.kitLoads[0].env.MGU_RENDERD_PROTO, 'upstream');
+    assert.equal(file.kitLoads[0].env.MGU_RENDERD_PROTO, undefined);
     const sw = runBundle(code, { MGU_RENDERER: 'software' });
     assert.equal(sw.kitLoads[0].env.MGU_RENDERER, 'software', 'программный путь по-прежнему выбирается');
   });

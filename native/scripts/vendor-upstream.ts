@@ -45,6 +45,18 @@ export const MODIFIED: Record<string, string> = {
     'explicit --store-package mode (SDK-free npm-format .tgz only: no oap-sdk check/copy/folder, no .mgu, ' +
     'no fit to the build machine, x.y.z version required, mguHmi and minimum requires in package.json, ' +
     'deterministic tar entries); icon helper run without a shell',
+  'kit/runtime/renderd.js':
+    'pixel images on mgu-render/1 connections (PROTOCOL.md of mgu-render 0.6.21): IMAGE 10 with premultiplied RGBA ' +
+    'up to 1024 a side, X_PIXMAP/X_PIXELS beyond that where offered, op 18 rewritten to x y w h r id in a copy of ' +
+    'each frame and layer; X_READY pixmap capability read; an image that cannot be sent is logged and emitted',
+  'kit/runtime/signals.js':
+    'watch(): poll timer cleared on shutdown and no callbacks after it; at most one getValue() per field in flight ' +
+    "(polls skipped while the binding's 3 s timeout has not settled it, never stacked); provider epoch: answers to reads " +
+    'started before a loss and notifications while the provider is away are dropped; per-field fieldPollMs, ' +
+    'onAvailability, res.losses, res.reads (getter counts/times/short error text, no values)',
+  'kit/runtime/record.js': 'makeLayer keeps the pixel images a layer draws (images), so transports upload them before the layer',
+  'kit/runtime/display.js':
+    "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it",
 };
 
 /** Добавленные файлы уведомлений (источник — относительно корня проекта или upstream-путь). */

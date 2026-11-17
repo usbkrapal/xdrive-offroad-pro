@@ -1,4 +1,4 @@
-// npm run native:build → native/dist/xdrive_offroad_pro/{app.json, main.js, assets.js}
+// npm run native:build → native/dist/xdrive_offroad_pro/{app.json, main.js, assets.js, NOTICE, icon.png}
 // Это каталог apps/<id> для upstream kit/tools/build.py. Установочный пакет здесь НЕ собирается.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,13 +7,17 @@ import { APP_ID, buildManifest } from '../src/manifest';
 import { assetsFingerprint, buildAssetsModule } from './assets';
 import { bundleMain, NATIVE, ROOT } from './bundle';
 import { scanBundle } from './compat-scan';
+import { ICON_FILE, renderIcon } from './icon';
 
 export const OUT_DIR = join(NATIVE, 'dist', APP_ID);
 /** NOTICE: build.py пакета копирует только файлы с точным именем LICENSE или NOTICE. */
 export const LICENSE_FILE = 'NOTICE';
 export const LICENSE_SRC = join(ROOT, 'licenses', 'IDRIVE7_APPS_MIT.txt');
-/** Ровно эти файлы составляют приложение (build.py упаковывает и каталоги — их быть не должно). */
-export const APP_FILES = ['app.json', 'main.js', 'assets.js', LICENSE_FILE] as const;
+/**
+ * Ровно эти файлы составляют приложение (build.py упаковывает и каталоги — их быть не должно).
+ * icon.png: build.py кладёт его иконкой точки входа вместо make_icon.js (иначе — только буквы iconGlyph).
+ */
+export const APP_FILES = ['app.json', 'main.js', 'assets.js', LICENSE_FILE, ICON_FILE] as const;
 
 function writeAtomic(file: string, data: string): void {
   writeFileSync(`${file}.tmp`, data);
@@ -72,6 +76,11 @@ export async function buildNative(opts: { force?: boolean; log?: (s: string) => 
 
   copyLicense();
   log(`${LICENSE_FILE}: idrive7-apps MIT notice (derived portions)`);
+
+  const icon = renderIcon();
+  writeFileSync(`${join(OUT_DIR, ICON_FILE)}.tmp`, icon);
+  renameSync(`${join(OUT_DIR, ICON_FILE)}.tmp`, join(OUT_DIR, ICON_FILE));
+  log(`${ICON_FILE}: app tile mark, ${icon.length} bytes`);
 
   // В каталоге приложения — только свои файлы.
   for (const f of readdirSync(OUT_DIR)) {

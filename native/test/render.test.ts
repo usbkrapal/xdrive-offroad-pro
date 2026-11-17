@@ -5,9 +5,9 @@ import { startApp, type AppHandle } from '../src/app';
 import { IMAGE_ID } from '../src/assets/spec';
 import type { Kit } from '../src/platform/kit';
 import type { Surface } from '../src/platform/kitTypes';
-import { BAR_H, M, W } from '../src/render/layout';
+import { BAR_Y } from '../src/render/layout';
 import { PAGE_COUNT } from '../src/render/pages';
-import { T, TAB_LABELS } from '../src/strings';
+import { TAB_LABELS } from '../src/strings';
 import { fakeCtx, fakeKit, FakeTransport, flush, hasUpstream, loadUpstream, strictSurface, syntheticAssets, type FakeCtx } from './helpers';
 
 const CDS = 'de.bmw.infotainment.vehicle.CDS';
@@ -84,12 +84,12 @@ describe('отрисовка: строгая поверхность (тольк�
     });
     assert.ok(!k.setImageCalls.some((c) => CAMERA_IDS.includes(c.id as never)), 'кадры камер даже не распакованы');
     let fr = k.frames[k.frames.length - 1] as { badges: { text: string }[] };
-    assert.equal(fr.badges[0].text, 'ЧТЕНИЕ · НЕТ ДАННЫХ');
+    assert.equal(fr.badges[0].text, 'НЕТ ДАННЫХ');
     tr.feed(CDS, 'statusEngineSpeed2', { actualValueRPMEngineCrankshaft: 3000 });
     await new Promise((r) => setTimeout(r, 150));
     await ctx.loopFn!();
     fr = k.frames[k.frames.length - 1] as { badges: { text: string }[] };
-    assert.equal(fr.badges[0].text, 'ЧТЕНИЕ · ЧАСТИЧНО');
+    assert.equal(fr.badges[0].text, 'ЧТЕНИЕ');
     app.dispose();
   });
 
@@ -183,8 +183,12 @@ describe('отрисовка: строгая поверхность (тольк�
   it('кнопки на странице только когда kit сам ведёт экран', async () => {
     const own = launch({}, { own: true });
     await own.ctx.loopFn!();
-    assert.ok((own.kit as ReturnType<typeof fakeKit>).buttons.length >= 3);
+    assert.equal((own.kit as ReturnType<typeof fakeKit>).buttons.length, 0, '«Рельеф»: в строке статуса кнопок нет');
+    own.ctx.tab!(4);
+    await own.ctx.loopFn!();
+    assert.equal((own.kit as ReturnType<typeof fakeKit>).buttons.length, 2, '«Камеры»: «Показать крупно» у двух миниатюр');
     const hmi = launch({}, { own: false });
+    hmi.ctx.tab!(4);
     await hmi.ctx.loopFn!();
     assert.equal((hmi.kit as ReturnType<typeof fakeKit>).buttons.length, 0);
     own.app.dispose();
@@ -235,30 +239,23 @@ describe('отрисовка: настоящий Recorder и программн�
     }
   });
 
-  it('own = true: подписи кнопок нижней полосы помещаются (настоящий G.button), включая самый длинный сценарий', async () => {
+  it('own = true: нижняя строка — только статус, без кнопок (пауза/сессия/сценарий — в «Настройках»)', async () => {
     const up = loadUpstream();
     const kit: Kit = { mgu: { run: () => undefined }, G: up.G, record: { setImage: up.record.setImage } };
-    const H = BAR_H - 4;
     for (const sc of SCENARIO_IDS) {
       const { ctx, app } = launch({ scenario: sc }, {
         kit,
         canvas: () => Object.assign(new up.record.Recorder(1600, 520), { own: true }) as Surface,
       });
-      for (const paused of [false, true]) {
-        app.model.setPaused(paused);
-        await ctx.loopFn!();
-        const rec = ctx.shown[ctx.shown.length - 1].cv as unknown as Surface & { targets: { x: number; w: number; h: number; key: string }[] };
-        const labels: Record<string, string> = {
-          'tb-pause': paused ? T.native.buttons.resume : T.native.buttons.pause,
-          'tb-session': T.native.buttons.newSession,
-          'tb-scenario': `${T.native.buttons.scenario}: ${T.scenarios[sc].name}`,
-        };
-        for (const [key, label] of Object.entries(labels)) {
-          const tg = rec.targets.find((t) => t.key === key);
-          assert.ok(tg, `${sc}: кнопка ${key}`);
-          const textW = rec.textWidth(label.toUpperCase(), H * 0.4, { font: 'bold', spacing: 1.5 });
-          assert.ok(textW + H * 0.5 <= tg.w, `${sc}/${key}: «${label}» ${textW.toFixed(0)} px в кнопке ${tg.w.toFixed(0)} px`);
-          assert.ok(tg.x + tg.w <= W - M - 280, `${sc}/${key}: кнопка заходит на время симуляции (${(tg.x + tg.w).toFixed(0)})`);
+      for (const page of [0, 1, 2, 3, 4]) {
+        for (const paused of [false, true]) {
+          app.setPage(page);
+          app.model.setPaused(paused);
+          await ctx.loopFn!();
+          const rec = ctx.shown[ctx.shown.length - 1].cv as unknown as { targets: { y: number; key: string }[] };
+          assert.deepEqual(rec.targets.filter((t) => t.key.startsWith('tb-') || t.y >= BAR_Y - 4).map((t) => t.key), [], `${sc}/${page}: в строке статуса нет кнопок`);
+          // на странице остаются только «Показать крупно» у миниатюр камер
+          assert.ok(rec.targets.every((t) => t.key.startsWith('cam-')), rec.targets.map((t) => t.key).join(','));
         }
       }
       app.dispose();

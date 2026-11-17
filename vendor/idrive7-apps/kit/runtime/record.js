@@ -299,7 +299,8 @@ class Recorder {
 function makeLayer(w, h, draw, textScale) {
     const r = new Recorder(Math.ceil(w), Math.ceil(h), { textScale });
     draw(r);
-    const L = { layerId: ++layerSeq, w: r.w, h: r.h, words: r.words().slice(), soft: null, sublayers: r.layersUsed, atlases: r.atlases, ramps: r.ramps };
+    // images: the pixel images it draws, so a transport uploads them before the layer
+    const L = { layerId: ++layerSeq, w: r.w, h: r.h, words: r.words().slice(), soft: null, sublayers: r.layersUsed, atlases: r.atlases, ramps: r.ramps, images: r.images };
     layerById.set(L.layerId, L);
     return L;
 }

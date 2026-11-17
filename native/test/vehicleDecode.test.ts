@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { decodeAccelG, decodeEngineTemp, decodeRpm, decodeSpeed, decodeTorque, INVALID } from '../src/vehicle/decode';
+import { GearboxOilGate, readTorqueSplit } from '../src/vehicle/bds';
+import { decodeAccelG, decodeEngineTemp, decodePedal, decodeRpm, decodeSpeed, decodeSteering, decodeTorque, decodeYawRate, INVALID } from '../src/vehicle/decode';
+import { decodeTyrePressure, decodeTyreTemperature, pressUnitOf, tempUnitOf } from '../src/vehicle/tpms';
 import { fuseGear, readGearbox, readSelection, stageOf, actualGearOf } from '../src/vehicle/gear';
 
 describe('масштабирование сырых полей (upstream car.js)', () => {
@@ -167,5 +169,79 @@ describe('слияние передачи по времени отсчётов',
   it('недопустимый отсчёт одного поля не мешает другому; оба недопустимы — invalid', () => {
     assert.deepEqual(fuseGear(gb({}, 1000), sel('R', 900), 1000, STALE), { kind: 'gear', gear: { selector: 'R', gear: null }, at: 900 });
     assert.deepEqual(fuseGear(gb({}, 1000), sel(99, 900), 1000, STALE), { kind: 'invalid', at: 1000 });
+  });
+});
+
+describe('новые поля (upstream live_data / xdrive_live / car_vitals / redline)', () => {
+  it('руль: int16 ×0.04395°, uint16 в доп. коде, 65535/−1 и |угол| > 900 — нет значения', () => {
+    assert.equal(decodeSteering(0), 0);
+    assert.equal(decodeSteering(32767), INVALID, '1440° > 900°');
+    assert.equal(decodeSteering(20477), 20477 * 0.04395);
+    assert.equal(decodeSteering(20478), INVALID);
+    assert.equal(decodeSteering(65536 - 20477), -20477 * 0.04395);
+    assert.equal(decodeSteering(-20477), -20477 * 0.04395);
+    assert.equal(decodeSteering(65535), INVALID);
+    assert.equal(decodeSteering(-1), INVALID);
+    assert.equal(decodeSteering(65536), INVALID);
+    assert.equal(decodeSteering(1.5), INVALID);
+    assert.equal(decodeSteering('100'), INVALID);
+  });
+
+  it('рыскание: ×0.005 − 163.84 °/с, 65535 — нет значения', () => {
+    assert.equal(decodeYawRate(32768), 0);
+    assert.equal(decodeYawRate(0), -163.84);
+    assert.equal(decodeYawRate(65535), INVALID);
+    assert.equal(decodeYawRate(-1), INVALID);
+  });
+
+  it('педаль: ×0.025 %, raw 0…4000', () => {
+    assert.equal(decodePedal(0), 0);
+    assert.equal(decodePedal(2000), 50);
+    assert.equal(decodePedal(4000), 100);
+    assert.equal(decodePedal(4001), INVALID);
+    assert.equal(decodePedal(65535), INVALID);
+    assert.equal(decodePedal(-1), INVALID);
+  });
+
+  it('распределение момента: квалификатор, 0/65535 — не заполнено, > 10000 — invalid, член отсутствует — не отсчёт', () => {
+    const r = readTorqueSplit({ valueDistributionLongitudinalTorqueRearAxisFrontAxis: 7500, qualifierValueDistributionLongitudinalTorqueRearAxisFrontAxis: 'SIGNALWERT_IST_GUELTIG' });
+    assert.deepEqual(r, { kind: 'split', rearPercent: 75, frontPercent: 25, qualifier: 'ok' });
+    assert.equal(readTorqueSplit({ valueDistributionLongitudinalTorqueRearAxisFrontAxis: 7500 })?.kind, 'split');
+    assert.equal(readTorqueSplit({ valueDistributionLongitudinalTorqueRearAxisFrontAxis: 0, qualifierValueDistributionLongitudinalTorqueRearAxisFrontAxis: 2 })?.kind, 'unfilled');
+    assert.equal(readTorqueSplit({ valueDistributionLongitudinalTorqueRearAxisFrontAxis: 65535 })?.kind, 'unfilled');
+    assert.equal(readTorqueSplit({ valueDistributionLongitudinalTorqueRearAxisFrontAxis: 10001 })?.kind, 'invalid');
+    assert.equal(readTorqueSplit({ valueDistributionLongitudinalTorqueRearAxisFrontAxis: 5000, qualifierValueDistributionLongitudinalTorqueRearAxisFrontAxis: 3 })?.kind, 'invalid');
+    assert.equal(readTorqueSplit({ valueTemperatureTransmissionOil: 100 }), null);
+  });
+
+  it('масло КПП: ждём второго разного сырого значения; 255 и вне −40…160 °C — invalid', () => {
+    const g = new GearboxOilGate();
+    assert.equal(g.read({ valueTemperatureTransmissionOil: 90 })?.kind, 'waiting');
+    assert.equal(g.read({ valueTemperatureTransmissionOil: 90 })?.kind, 'waiting');
+    assert.equal(g.read({ valueTemperatureTransmissionOil: 255 })?.kind, 'invalid');
+    assert.deepEqual(g.read({ valueTemperatureTransmissionOil: 91 }), { kind: 'value', c: 43 });
+    assert.deepEqual(g.read({ valueTemperatureTransmissionOil: 90 }), { kind: 'value', c: 42 });
+    assert.equal(new GearboxOilGate().read({ valueTemperatureTransmissionOil: 0 })?.kind, 'invalid');
+    assert.equal(new GearboxOilGate().read({}), null);
+  });
+
+  it('TPMS: единицы номером/именем; давление raw × 0.1 в единице, ≥ 65532 нет; 0 бар допустим; температура raw − 40', () => {
+    assert.equal(pressUnitOf(1), 'BAR');
+    assert.equal(pressUnitOf('PSI'), 'PSI');
+    assert.equal(pressUnitOf('psi'), null);
+    assert.equal(pressUnitOf(0), null);
+    assert.equal(tempUnitOf(2), 'F');
+    assert.equal(tempUnitOf('K'), null);
+    assert.equal(decodeTyrePressure(0, 'BAR'), 0);
+    assert.ok(Math.abs((decodeTyrePressure(23, 'BAR') as number) - 2.3) < 1e-9);
+    assert.ok(Math.abs((decodeTyrePressure(2300, 'KPA') as number) - 2.3) < 1e-9);
+    assert.ok(Math.abs((decodeTyrePressure(330, 'PSI') as number) - 33 / 14.5038) < 1e-9);
+    assert.equal(decodeTyrePressure(65532, 'BAR'), null);
+    assert.equal(decodeTyrePressure(61, 'BAR'), null, '> 6 бар (граница upstream)');
+    assert.equal(decodeTyreTemperature(60, 'C'), 20);
+    assert.ok(Math.abs((decodeTyreTemperature(140, 'F') as number) - (68 * 5) / 9) < 1e-9);
+    assert.equal(decodeTyreTemperature(65535, 'C'), null);
+    assert.equal(decodeTyreTemperature(0, 'C'), -40);
+    assert.equal(decodeTyreTemperature(200, 'C'), null);
   });
 });

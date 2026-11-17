@@ -74,9 +74,11 @@
     },
     {
       "path": "kit/runtime/display.js",
-      "status": "unchanged",
-      "sha256": "4ae710fb0fdac75b871c4415ed99a5c926528d823c0dce056c0e5da3837cc158",
-      "upstreamBlob": "3f68b12ceaea688aa373c564fa90810f552f9832"
+      "status": "modified",
+      "sha256": "aecb8e2bb04ad105e1cf468aeb1bf7bbd0c1c6452ced6ab59c2dee59e979e9e0",
+      "upstreamBlob": "3f68b12ceaea688aa373c564fa90810f552f9832",
+      "upstreamSha256": "4ae710fb0fdac75b871c4415ed99a5c926528d823c0dce056c0e5da3837cc158",
+      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it"
     },
     {
       "path": "kit/runtime/ecus.js",
@@ -237,15 +239,19 @@
     },
     {
       "path": "kit/runtime/record.js",
-      "status": "unchanged",
-      "sha256": "0fda0a3094c726dc52b7fe9812b586d500806337ca5213c34bfece5606a7e74c",
-      "upstreamBlob": "2c40448f761a2d3c526c764b045dc6d859c07528"
+      "status": "modified",
+      "sha256": "e41700e509ac07c6f57cc9eb90709aae3996446bcb0efa3634323bf4ee497169",
+      "upstreamBlob": "2c40448f761a2d3c526c764b045dc6d859c07528",
+      "upstreamSha256": "0fda0a3094c726dc52b7fe9812b586d500806337ca5213c34bfece5606a7e74c",
+      "summary": "makeLayer keeps the pixel images a layer draws (images), so transports upload them before the layer"
     },
     {
       "path": "kit/runtime/renderd.js",
-      "status": "unchanged",
-      "sha256": "dc26de3883b43ecdd917de66cac470737104b43242c9746cfdc888c5b2f4c183",
-      "upstreamBlob": "21df6040b107dabbbe5593ccc70093b5c2238a0c"
+      "status": "modified",
+      "sha256": "8372d17f64a4859ad00c45228404d6ba78329363cb2ca7c70d11c86b40afcd70",
+      "upstreamBlob": "21df6040b107dabbbe5593ccc70093b5c2238a0c",
+      "upstreamSha256": "dc26de3883b43ecdd917de66cac470737104b43242c9746cfdc888c5b2f4c183",
+      "summary": "pixel images on mgu-render/1 connections (PROTOCOL.md of mgu-render 0.6.21): IMAGE 10 with premultiplied RGBA up to 1024 a side, X_PIXMAP/X_PIXELS beyond that where offered, op 18 rewritten to x y w h r id in a copy of each frame and layer; X_READY pixmap capability read; an image that cannot be sent is logged and emitted"
     },
     {
       "path": "kit/runtime/run_timer.js",
@@ -267,9 +273,11 @@
     },
     {
       "path": "kit/runtime/signals.js",
-      "status": "unchanged",
-      "sha256": "952b0e2c5854dcf7bf4c9b3ab4f86a5a98328daff6c631abc6b60e62f3b67d98",
-      "upstreamBlob": "8bbf3754b3ac767bb7c449600e69ae0f0ef306a0"
+      "status": "modified",
+      "sha256": "cbbc3a79a41548129d646eca069c8cc68e0e370720633f1d2c69e6527bff820c",
+      "upstreamBlob": "8bbf3754b3ac767bb7c449600e69ae0f0ef306a0",
+      "upstreamSha256": "952b0e2c5854dcf7bf4c9b3ab4f86a5a98328daff6c631abc6b60e62f3b67d98",
+      "summary": "watch(): poll timer cleared on shutdown and no callbacks after it; at most one getValue() per field in flight (polls skipped while the binding's 3 s timeout has not settled it, never stacked); provider epoch: answers to reads started before a loss and notifications while the provider is away are dropped; per-field fieldPollMs, onAvailability, res.losses, res.reads (getter counts/times/short error text, no values)"
     },
     {
       "path": "kit/runtime/sim.js",

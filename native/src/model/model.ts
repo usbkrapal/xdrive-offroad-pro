@@ -9,7 +9,7 @@ import { SCENARIO_IDS, type ScenarioId, type SignalMap, type TelemetrySnapshot }
 import { MockTelemetryProvider } from '../../../src/providers/mock/MockTelemetryProvider';
 import type { Now } from '../clock';
 import type { Log, WatchFn } from '../platform/kitTypes';
-import { VehicleAdapter, type VehicleStatus } from '../vehicle/adapter';
+import { VehicleAdapter, type VehicleDiagnostics, type VehicleStatus } from '../vehicle/adapter';
 
 export type DataMode = 'demo' | 'vehicle';
 export const DATA_MODES: readonly DataMode[] = ['demo', 'vehicle'];
@@ -51,6 +51,8 @@ interface Source {
   setPaused(p: boolean): boolean;
   newSession(): void;
   dispose(): void;
+  /** Диагностика чтения (только автомобиль); по запросу экрана настроек, не на кадр. */
+  diagnostics(): VehicleDiagnostics | null;
 }
 
 class DemoSource implements Source {
@@ -77,6 +79,9 @@ class DemoSource implements Source {
   }
   dispose() {
     this.store.dispose();
+  }
+  diagnostics() {
+    return null;
   }
 }
 
@@ -120,6 +125,9 @@ class VehicleSource implements Source {
   }
   newSession() {
     this.session = createSession(asDomain(this.snapshot));
+  }
+  diagnostics(): VehicleDiagnostics {
+    return this.adapter.diagnostics(this.now() - this.t0);
   }
   dispose() {
     if (this.timer !== null) clearInterval(this.timer);
@@ -189,6 +197,11 @@ export class NativeModel {
   newSession(): void {
     this.source.newSession();
     this.epoch++;
+  }
+
+  /** Снимок диагностики режима «Автомобиль» (null в демо). Собирается по запросу, не в цикле кадра. */
+  diagnostics(): VehicleDiagnostics | null {
+    return this.disposed ? null : this.source.diagnostics();
   }
 
   dispose(): void {

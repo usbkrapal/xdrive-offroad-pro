@@ -14,8 +14,14 @@
  * opts.native: ask for mgu-render's own dialect (mgu-render/1, the Store's renderer). There touch
  * claims and the controller grab work on one connection, and X_STATE says when the renderer has
  * the app on screen. A renderer that does not speak it answers READY alone and the connection
- * stays in the upstream dialect. Pixel images (op 18) are upstream only: an app that draws them
- * (Doom) connects without opts.native.
+ * stays in the upstream dialect.
+ *
+ * Pixel images (record.js setImage, op 18) go in either dialect. Upstream: IMAGE (9), opaque RGBA up to
+ * 4096 a side, op 18 `id ver x y w h`. mgu-render/1: IMAGE (10), premultiplied RGBA up to 1024 a side (a
+ * bigger one as an X_PIXMAP written with X_PIXELS where the renderer offers pixmaps), op 18
+ * `x y w h r id`: the recorded op 18 is rewritten that way in a copy of every frame and layer sent (the
+ * recording itself stays as record.js wrote it, for the software path). An image that cannot be sent is
+ * logged and emitted as 'imageError' (id, why), never dropped without a word.
  */
 const net = require('net');
 const fs = require('fs');
@@ -32,8 +38,51 @@ const E = { READY: 101, TICK: 102, ERROR: 103, STATS: 104, CCU: 105 };
 // touch (mgu-render, IterioDev's mgu-renderd): message 9 is CLAIM there; 105 and 106 come back as TOUCH and CLOSED
 const CLAIM = 9, TOUCH = 105, CLOSED = 106;
 // mgu-render/1 (mgu-store native/mgu-render/PROTOCOL.md)
-const X = { MODE: 0x4d520001, GRAB: 0x4d520002, READY: 0x4d520101, STATE: 0x4d520102, CCU: 0x4d520103 };
+const X = { MODE: 0x4d520001, GRAB: 0x4d520002, PIXMAP: 0x4d520003, PIXELS: 0x4d520004, READY: 0x4d520101, STATE: 0x4d520102, CCU: 0x4d520103 };
 const X_MODE_LAYER = 1;
+// mgu-render/1 pictures (IMAGE, message 10): at most this many px a side; X_PIXMAP formats and filters
+const PICTURE = 10, PICTURE_MAX = 1024, PIXMAP_PREMULTIPLIED = 1, PIXMAP_LINEAR = 1;
+// record.js draw ops: words each takes, op word included (proto.h); variable ones below
+const OP_IMAGE = 18;
+const OP_WORDS = [0, 2, 6, 0, 7, 8, 0, 9, 12, 7, 0, 0, 4, 5, 1, 10, 2, 4, 7];
+function opWords(u, i) {
+    const op = u[i];
+    switch (op) {
+    case 3: return 6 + 2 * u[i + 5];            // GRAD x y w h n (t c)*n
+    case 6: return 7 + 2 * u[i + 6];            // CARD x y w h r n (t c)*n
+    case 10: return 2 + 9 * u[i + 1];           // TRIS n (x y c)*3n
+    case 11: return 4 + 8 * u[i + 3];           // GLYPHS atlas c n (x y w h u0 v0 u1 v1)*n
+    default: return op > 0 && op < OP_WORDS.length ? OP_WORDS[op] : 0;
+    }
+}
+/**
+ * Recorded draw ops for an mgu-render/1 connection: op 18 `id ver x y w h` becomes `x y w h r id` (r 0),
+ * the same seven words; every other op is passed on word for word. A copy only when there is an op 18
+ * (the recording stays as it is). null: a word that is no draw op (nothing of it may be sent).
+ */
+function nativeOps(u) {
+    let out = null;
+    for (let i = 0; i < u.length;) {
+        const n = opWords(u, i);
+        if (!n || i + n > u.length) return null;
+        if (u[i] === OP_IMAGE) {
+            if (!out) out = new Uint32Array(u);
+            out[i + 1] = u[i + 3]; out[i + 2] = u[i + 4]; out[i + 3] = u[i + 5]; out[i + 4] = u[i + 6];
+            out[i + 5] = 0; out[i + 6] = u[i + 1];
+        }
+        i += n;
+    }
+    return out || u;
+}
+/** straight RGBA -> premultiplied, into dst at off (each colour x alpha / 255, rounded) */
+function premultiply(src, n, dst, off) {
+    for (let i = 0; i < n; i += 4) {
+        const a = src[i + 3];
+        if (a === 255) { dst[off + i] = src[i]; dst[off + i + 1] = src[i + 1]; dst[off + i + 2] = src[i + 2]; dst[off + i + 3] = 255; continue; }
+        dst[off + i] = (src[i] * a + 127) / 255 | 0; dst[off + i + 1] = (src[i + 1] * a + 127) / 255 | 0;
+        dst[off + i + 2] = (src[i + 2] * a + 127) / 255 | 0; dst[off + i + 3] = a;
+    }
+}
 
 function msg(type, payload) {
     const len = payload ? payload.length : 0;
@@ -66,7 +115,7 @@ class RenderClient extends EventEmitter {
         this.fd = null;              // file sink
         this.claimed = null;         // the claims sent on this connection (JSON), null: none yet
         this.native = false;         // this connection speaks mgu-render/1 (X_READY came)
-        this.info = null;            // X_READY: { touch, controller, frontGate }
+        this.info = null;            // X_READY: { touch, controller, frontGate, pixmaps, pixmapMax }
         this.area = null;            // X_READY: the app area { x, y, w, h } (screen px), null: not told
         this.onScreen = null;        // X_STATE: the renderer shows us (null: not told)
     }
@@ -210,7 +259,8 @@ class RenderClient extends EventEmitter {
             if (type === X.READY && p.length >= 12) {
                 const caps = p.readUInt32LE(8);
                 this.native = true;
-                this.info = { touch: !!(caps & 1), controller: !!(caps & 2), frontGate: !!(caps & 4) };
+                this.info = { touch: !!(caps & 1), controller: !!(caps & 2), frontGate: !!(caps & 4), pixmaps: !!(caps & 8),
+                    pixmapMax: (caps & 8) && p.length >= 48 ? p.readUInt32LE(44) : 0 };
                 // the app area (where the HMI leaves room for apps, in screen px): after the embed box
                 this.area = p.length >= 44 ? { x: p.readInt32LE(28), y: p.readInt32LE(32), w: p.readInt32LE(36), h: p.readInt32LE(40) } : null;
             } else if (type === E.READY) {
@@ -315,10 +365,10 @@ class RenderClient extends EventEmitter {
     }
     /** upload a pixel image when this connection hasn't got its current version */
     _ensureImage(id) {
-        if (this.native) { if (!this.imgWarned) { this.imgWarned = true; this.log.warn('renderd: pixel images need the upstream dialect'); } return; }
         const im = rec.imageById.get(id);
         if (!im || !im.data) return;
         if (this.sent.image.get(id) === im.ver) return;
+        if (this.native) { if (this._sendPicture(id, im)) this.sent.image.set(id, im.ver); return; }
         const n = im.w * im.h * 4, b = this._imageBuf(8 + 12 + n);
         b.writeUInt32LE(M.IMAGE, 0); b.writeUInt32LE(12 + n, 4);
         b.writeUInt32LE(id, 8); b.writeUInt32LE(im.w, 12); b.writeUInt32LE(im.h, 16);
@@ -326,14 +376,61 @@ class RenderClient extends EventEmitter {
         this._write(b);
         this.sent.image.set(id, im.ver);
     }
+    /**
+     * mgu-render/1: the picture as IMAGE (10), premultiplied (once, from record.js's straight RGBA); a side over
+     * 1024 as a pixmap where offered. false (logged, 'imageError'): not sent, the op draws nothing.
+     */
+    _sendPicture(id, im) {
+        const w = im.w, h = im.h, n = w * h * 4;
+        const fail = (why) => {
+            const key = id + ':' + im.ver;
+            if (this.imgFailed !== key) { this.imgFailed = key; this.log.error('renderd: image ' + id + ' (' + w + 'x' + h + ') not sent: ' + why); }
+            this.emit('imageError', id, why);
+            return false;
+        };
+        if (!(w > 0 && h > 0) || im.data.length < n) return fail('no pixels for that size');
+        if (w <= PICTURE_MAX && h <= PICTURE_MAX) {
+            const b = this._imageBuf(8 + 12 + n);
+            b.writeUInt32LE(PICTURE, 0); b.writeUInt32LE(12 + n, 4);
+            b.writeUInt32LE(id, 8); b.writeUInt32LE(w, 12); b.writeUInt32LE(h, 16);
+            premultiply(im.data, n, b, 20);
+            this._write(b);
+            return true;
+        }
+        const pm = this.info && this.info.pixmaps ? this.info.pixmapMax || 2048 : 0;
+        if (!pm) return fail('over ' + PICTURE_MAX + ' px a side and the renderer offers no pixmaps');
+        if (w > pm || h > pm) return fail('over the renderer\'s largest pixmap (' + pm + ' px a side)');
+        this._write(this._u32msg(X.PIXMAP, [id, w, h, PIXMAP_PREMULTIPLIED, PIXMAP_LINEAR]));
+        // one rect a message, in bands of rows (a message stays well under the renderer's 24 MiB)
+        const band = Math.max(1, Math.floor((4 << 20) / (w * 4)));
+        for (let y = 0; y < h; y += band) {
+            const bh = Math.min(band, h - y), len = 8 + 16 + w * bh * 4;
+            const b = Buffer.allocUnsafe(8 + len);
+            b.writeUInt32LE(X.PIXELS, 0); b.writeUInt32LE(len, 4);
+            b.writeUInt32LE(id, 8); b.writeUInt32LE(1, 12);
+            b.writeUInt32LE(0, 16); b.writeUInt32LE(y, 20); b.writeUInt32LE(w, 24); b.writeUInt32LE(bh, 28);
+            premultiply(im.data.subarray(y * w * 4, (y + bh) * w * 4), w * bh * 4, b, 32);
+            this._write(b);
+        }
+        return true;
+    }
+    /** draw ops as this connection's dialect has them; null (logged): not to be sent */
+    _ops(u, what) {
+        if (!this.native) return u;
+        const out = nativeOps(u);
+        if (!out) this.log.error('renderd: ' + what + ' has a word that is no draw op - not sent');
+        return out;
+    }
     _ensureLayer(id) {
         if (this.sent.layer.has(id)) return;
         const L = rec.layerById.get(id);
         if (!L) return;
         this._ensureRes(L);
+        const ops = this._ops(L.words, 'layer ' + id);
+        if (!ops) return;
         const head = Buffer.alloc(12);
         head.writeUInt32LE(id, 0); head.writeFloatLE(L.w, 4); head.writeFloatLE(L.h, 8);
-        this._write(msg(M.LAYER, Buffer.concat([head, words(L.words)])));
+        this._write(msg(M.LAYER, Buffer.concat([head, words(ops)])));
         this.sent.layer.add(id);
     }
     dropLayer(id) {
@@ -344,9 +441,11 @@ class RenderClient extends EventEmitter {
     frame(r) {
         if (!this.ready || !this.placement) return false;
         this._ensureRes(r);
+        const ops = this._ops(r.words(), 'frame');
+        if (!ops) return false;
         this.waiting = true;
-        return this._write(msg(M.FRAME, words(r.words())));
+        return this._write(msg(M.FRAME, words(ops)));
     }
 }
 
-module.exports = { RenderClient, SOCKET, SOCKETS };
+module.exports = { RenderClient, SOCKET, SOCKETS, nativeOps, premultiply };

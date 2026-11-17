@@ -37,6 +37,8 @@ export interface Surface {
   /** Кит сам ведёт экран (кнопки на странице вместо панели HMI). */
   own?: boolean;
   chrome?: unknown;
+  /** Вкладки, нарисованные G.frame на этой поверхности (без chrome). */
+  tabRects?: readonly { i: number; x: number; y: number; w: number; h: number }[] | null;
   clear(c?: Color): Surface;
   fillRect(x: number, y: number, w: number, h: number, c: Color): Surface;
   gradientRect(x: number, y: number, w: number, h: number, stops: readonly (readonly [number, Color])[]): Surface;
@@ -90,6 +92,8 @@ export interface RecordApi {
 export interface WatchResult {
   available: boolean;
   error: string | null;
+  /** Сколько раз провайдер пропадал (вендорный signals.js; у upstream нет). */
+  losses?: number;
   shutdown(): Promise<unknown>;
 }
 
@@ -106,7 +110,14 @@ export interface Log {
  * Единственная функция SOME/IP, которую вызывает приложение: подписка + чтение (r/s).
  * proxy/call/set/on (методы, запись, UDS) сознательно не входят в этот тип.
  */
-export type WatchFn = (iface: string, instance: string, handlers: Record<string, FieldHandler>, log?: Log) => Promise<WatchResult>;
+/** Пятый аргумент watch вендорного kit/runtime/signals.js (без него — поведение upstream). */
+export interface WatchOpts {
+  pollMs?: number;
+  fieldPollMs?: Record<string, number>;
+  onAvailability?: (available: boolean) => void;
+}
+
+export type WatchFn = (iface: string, instance: string, handlers: Record<string, FieldHandler>, log?: Log, opts?: WatchOpts) => Promise<WatchResult>;
 
 export interface SettingsApi {
   get(key: string): unknown;
@@ -129,8 +140,29 @@ export interface LoopHandle {
   kick?(): void;
 }
 
+/** Соединение с рендерером (renderd.js RenderClient) — только то, что читает статус управления. */
+export interface RenderConnection {
+  readonly ready?: boolean;
+  /** mgu-render/1 (пришёл X_READY). */
+  readonly native?: boolean;
+  /** Рендерер маршрутизирует касания (четвёртое слово READY). */
+  readonly touch?: boolean;
+}
+
+/** kit/runtime/display.js Display (ctx.display) — только используемое. */
+export interface DisplayApi {
+  /** Знак приложения в начале шапки полноэкранной раскладки (вендорная правка display.js). */
+  brand?: { width(c: Surface): number; draw(c: Surface, x: number, y: number, w: number, h: number, theme: Theme): void } | null;
+  /** Бейджи в шапке поместились рядом с брендом и всеми вкладками (иначе kit убрал их из шапки). */
+  readonly headBadges?: boolean;
+  readonly gpu?: RenderConnection | null;
+  layout?(): string;
+}
+
 /** ctx из kit/mgu.js (и заглушки kit/tools/hu-stub.js). */
 export interface MguCtx {
+  /** На машине есть всегда; в заглушке head unit — нет. */
+  display?: DisplayApi;
   ui: UiApi;
   settings: SettingsApi;
   log: Log;

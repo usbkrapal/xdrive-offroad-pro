@@ -51,3 +51,40 @@ export function decodeAccelG(v: unknown): Decoded {
   if (raw === null || raw === 0xffff) return INVALID;
   return (raw * 0.002 - 65) / G0;
 }
+
+/** Целое со знаком −32768…−1 (int16) или 0…65535 (uint16, дополнительный код) → int16; иначе null. */
+function int16Of(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < -0x8000 || v > 0xffff) return null;
+  return v >= 0x8000 ? v - 0x10000 : v;
+}
+
+/**
+ * SteeringAngle.ActualSteeringAngleDriver / actualSteeringAngleDriverNoCRC .actualValueSteeringAngleDriver:
+ * int16 × 0.04395 °, 65535 — нет значения (upstream xdrive_live.js, live_data/signals.js: s16, lim ±900).
+ * Привязка может отдать и uint16 (дополнительный код), и уже int16: −1 и есть 0xFFFF — тоже «нет значения».
+ */
+export function decodeSteering(v: unknown): Decoded {
+  if (v === 0xffff || v === -1) return INVALID;
+  const raw = int16Of(v);
+  if (raw === null) return INVALID;
+  const deg = raw * 0.04395;
+  return deg < -900 || deg > 900 ? INVALID : deg;
+}
+
+/** CDS2.statusYawVelocityVehicle.yawVelocityVehicle: uint16 × 0.005 − 163.84 °/с, 65535 — нет значения. */
+export function decodeYawRate(v: unknown): Decoded {
+  const raw = rawUInt(v, 0xffff);
+  if (raw === null || raw === 0xffff) return INVALID;
+  return raw * 0.005 - 163.84;
+}
+
+/**
+ * AcceleratorPedal.AngleAcceleratorPedal.actualValueAngleAcceleratorPedal: × 0.025 % (live_data/signals.js).
+ * Физический диапазон raw 0…4000 (0…100 %); всё вне него, в т. ч. сентинелы, — нет значения.
+ * Это положение педали, НЕ дроссель (engine.throttlePercent).
+ */
+export function decodePedal(v: unknown): Decoded {
+  const raw = rawUInt(v, 0xffff);
+  if (raw === null || raw > 4000) return INVALID;
+  return raw * 0.025;
+}

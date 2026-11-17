@@ -1,18 +1,22 @@
 // Связка рантайма kit с моделью и отрисовкой. Без React/DOM.
-// Управление: вкладки в заголовке и iDrive-контроллер — средствами kit (контроллер не захватывается);
-// пять кнопок HMI: следующий/предыдущий экран, пауза демо, новая сессия, настройки. С upstream-диалектом
-// (renderTarget.ts) kit не ведёт экран сам (cv.own = false): кнопок на странице и строк ctx.settingsRow нет,
-// поэтому всё нужное — на панели HMI и в настройках (основная камера).
+// Управление. На mgu-render/1 с касанием (раскладка «Весь экран») kit сам ведёт экран (cv.own): вкладки и
+// «Настройки» в шапке касанием, нижней панели нет (кнопки HMI скрыты: листание — вкладки, пауза и новая
+// сессия — строки «Настроек», hideButton), сценарий и основная камера — выбор в «Настройках», «Показать
+// крупно» — кнопки на странице. Контроллер iDrive kit берёт сам только на это время (display.js), приложение
+// его не захватывает. Без этого (программная отрисовка, рендерер без mgu-render/1, стандартная раскладка)
+// управление — пять кнопок HMI и настройки HMI; строка статуса объясняет, почему касания нет.
 
-import { SCENARIO_IDS, type ScenarioId } from '../../src/domain/types';
+import type { ScenarioId } from '../../src/domain/types';
 import { CAMERA_IDS, DEFAULT_PRIMARY_CAMERA, type CameraId } from '../../src/screens/cameraPresentation';
 import { ImageRegistry } from './assets/registry';
 import { IMAGE_ID, type AssetsModule } from './assets/spec';
 import type { Now } from './clock';
 import { DEFAULT_MODE, isMode, isScenario, NativeModel, type DataMode } from './model/model';
 import type { Kit } from './platform/kit';
-import type { LoopHandle, MguCtx, Surface } from './platform/kitTypes';
-import { badges, toolbar, type ToolbarButton } from './render/chrome';
+import type { DisplayApi, LoopHandle, MguCtx, Surface } from './platform/kitTypes';
+import { drawPageBrand, HEADER_BRAND } from './render/brand';
+import { badges, toolbar } from './render/chrome';
+import { DIAG, diagnosticsSheet } from './render/diagnostics';
 import { DialTexture } from './render/dial';
 import { Phases, stageRates } from './render/drivetrain';
 import { H, W } from './render/layout';
@@ -28,6 +32,22 @@ export const SOFTWARE_FPS = 10;
 
 export const isCameraId = (v: unknown): v is CameraId => typeof v === 'string' && (CAMERA_IDS as readonly string[]).indexOf(v) >= 0;
 
+/**
+ * Почему касания нет (null — kit ведёт экран, всё касанием). Только по тому, что сообщил рендерер:
+ * без display (заглушка head unit) или без соединения — программный путь.
+ */
+export function inputNote(own: boolean, display: DisplayApi | undefined): string | null {
+  if (own) return null;
+  const s = T.native.input;
+  const g = display && display.gpu;
+  if (!g) return s.software;
+  if (!g.ready) return s.waiting;
+  if (!g.native) return s.upstream;
+  if (!g.touch) return s.noTouch;
+  if (display && display.layout && display.layout() !== 'full') return s.standard;
+  return s.waiting;
+}
+
 export interface AppHandle {
   readonly model: NativeModel;
   render(): unknown;
@@ -41,7 +61,8 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
   const savedMode = settings.get('dataSource');
   const savedScenario = settings.get('scenario');
   const model = new NativeModel(
-    { now, watch: (iface, inst, handlers, l) => ctx.signals.watch(iface, inst, handlers, l), log },
+    // пятый аргумент (опрос геттерами, потеря провайдера) — до вендорного signals.js (native/src/vehicle/INTEGRATION.md)
+    { now, watch: (iface, inst, handlers, l, opts) => ctx.signals.watch(iface, inst, handlers, l, opts), log },
     isMode(savedMode) ? savedMode : DEFAULT_MODE,
     isScenario(savedScenario) ? savedScenario : 'mountainTrail',
   );
@@ -84,10 +105,6 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
       model.newSession();
       kick();
     },
-    nextScenario: () => {
-      const i = SCENARIO_IDS.indexOf(model.getState().scenarioId);
-      settings.set('scenario', SCENARIO_IDS[(i + 1) % SCENARIO_IDS.length]);
-    },
   };
 
   const render = () => {
@@ -104,8 +121,11 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
     const dt = lastFrame === null || state.paused ? 0 : (t - lastFrame) / 1000;
     lastFrame = t;
     phases.advance(stageRates(state.snapshot.signals), dt);
-    kit.G.frame(cv, theme, TAB_LABELS, page, badges(state));
-    const button: ToolbarButton | null = cv.own
+    const bdg = badges(state);
+    kit.G.frame(cv, theme, TAB_LABELS, page, bdg);
+    // Полноэкранная раскладка: бренд в шапке рисует kit (display.brand); иначе — в полосе вкладок страницы.
+    if (!cv.chrome) drawPageBrand(cv, cv.tabRects, bdg, W);
+    const button: PageEnv['button'] = cv.own
       ? (x, y, w, h, label, run, key, primary) => kit.G.button(cv, theme, x, y, w, h, label, run, { key, primary })
       : null;
     const env: PageEnv = {
@@ -126,7 +146,7 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
     } catch (e) {
       log.error('page ' + page, e);
     }
-    toolbar(cv, state, button, actions);
+    toolbar(cv, state, inputNote(!!cv.own, ctx.display));
     return ctx.ui.image(GRAPHIC, cv);
   };
 
@@ -142,9 +162,31 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
     if (model.dataMode === 'demo') actions.togglePause();
   });
   ctx.ui.onClick(BUTTONS.session, () => actions.newSession());
-  // Только где kit сам ведёт экран (own): строка в его настройках и кнопки на странице (полоса внизу);
-  // там кнопки панели «Пауза» и «Сброс» не нужны. Иначе (upstream-диалект, программный путь) — панель HMI.
-  if (ctx.settingsRow) ctx.settingsRow({ label: T.native.buttons.newSession, value: '', open: () => (actions.newSession(), null) });
+  // Только где kit сам ведёт экран (own): строки внизу его «Настроек» (касание / контроллер); там кнопки
+  // панели «Пауза» и «Сброс» не нужны (листание и «Настройки» kit убирает сам): ни одной кнопки, нет панели.
+  // Иначе (программный путь, рендерер без mgu-render/1) — панель HMI со всеми пятью.
+  const rows = T.native.rows;
+  if (ctx.settingsRow) {
+    ctx.settingsRow({
+      label: rows.demo,
+      value: () => (model.dataMode !== 'demo' ? rows.demoVehicle : model.getState().paused ? rows.demoPaused : rows.demoRunning),
+      open: () => {
+        if (model.dataMode === 'demo') actions.togglePause();
+        return null;
+      },
+    });
+    ctx.settingsRow({ label: rows.newSession, value: rows.newSessionValue, open: () => (actions.newSession(), null) });
+    // Диагностика чтения: лист со снимком адаптера (по открытию / «Обновить»), только в режиме «Автомобиль».
+    ctx.settingsRow({
+      label: DIAG.row,
+      value: () => (model.dataMode === 'vehicle' ? DIAG.rowOpen : DIAG.rowDemo),
+      open: () => diagnosticsSheet(() => model.diagnostics()),
+    });
+    // Строки есть только там, где управление касанием (kit рисует «Настройки» сам).
+    ctx.settingsRow({ label: rows.input, value: rows.inputTouch });
+  }
+  // Знак приложения в начале шапки (вендорная правка display.js; без неё свойство ни на что не влияет).
+  if (ctx.display) ctx.display.brand = HEADER_BRAND;
   if (ctx.hideButton) {
     ctx.hideButton(BUTTONS.action);
     ctx.hideButton(BUTTONS.session);

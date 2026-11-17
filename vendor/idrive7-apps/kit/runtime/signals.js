@@ -61,39 +61,113 @@ function loadConfig(iface) {
     throw new Error('no SOME/IP config for ' + iface + ' (add it to app.json "signals")');
 }
 
+const GET_TIMEOUT_MS = 3000;
+
 /**
  * Build a proxy and subscribe to fields. handlers = { fieldName: fn(value) }.
  * Also does an initial getValue() for fields that have a getter, so values
  * show up without waiting for the next change.
  * opts.pollMs: also re-read those fields that often while the provider is available - for
  * fields a car may not notify (BMW's x_call only ever reads TPMS, it never subscribes).
+ * opts.fieldPollMs: { fieldName: ms } - a field's own re-read period (instead of pollMs).
+ * opts.onAvailability: fn(bool) on every change of the provider's availability.
+ *
+ * Lifecycle (xdrive_offroad_pro patch): shutdown() stops the poll timer and every callback
+ * (no handler runs after it, late getValue answers are dropped). A field has at most one
+ * getValue() out at a time: the binding's own timeout (GET_TIMEOUT_MS) is what settles it, and
+ * while it hasn't, the field's polls are skipped (counted), never stacked. Each loss of the
+ * provider starts a new epoch: an answer to a read started before it is dropped, as is a field
+ * notification while the provider is known to be away. Each field's read and handler fail on
+ * their own. res.losses counts provider losses, so a caller that only looks at res.available now
+ * and then still sees a drop it missed. res.reads[field] (getter fields only): counts and times
+ * of the reads, the last error's text (short, no values) and pendingSince - no payloads.
  */
 async function watch(iface, instance, handlers, log, opts) {
-    const res = { iface, available: false, proxy: null, error: null, shutdown: () => Promise.resolve() };
+    const res = { iface, available: false, losses: 0, reads: {}, proxy: null, error: null, shutdown: () => Promise.resolve() };
     if (!someip) { res.error = 'someip native module not available'; return res; }
+    // epoch: bumped on every loss of the provider; availKnown: the binding has said yes or no at least once
+    let stopped = false, timer = null, p = null, epoch = 0, availKnown = false;
+    res.shutdown = () => {
+        stopped = true;
+        if (timer !== null) { clearInterval(timer); timer = null; }
+        return Promise.resolve().then(() => p && p.shutdown && p.shutdown()).catch(() => {});
+    };
+    const deliver = (f, v) => {
+        if (stopped) return;
+        try { handlers[f](v); } catch (e) { if (log) log.warn(iface + '.' + f + ': ' + e); }
+    };
+    // a notification while the provider is known to be away is not a sample (it would outlive the loss)
+    const notify = (f, v) => { if (!availKnown || res.available) deliver(f, v); };
+    const setAvailable = (a) => {
+        if (stopped) return;
+        availKnown = true;
+        if (res.available && !a) { res.losses++; epoch++; }
+        const changed = res.available !== a;
+        res.available = a;
+        if (changed && opts && typeof opts.onAvailability === 'function') {
+            try { opts.onAvailability(a); } catch (e) { if (log) log.warn(iface + ' availability: ' + e); }
+        }
+    };
     try {
         const cfg = loadConfig(iface);
-        const p = await nativeTick(() => someip.buildProxy(cfg, String(instance)).then((px) => px.init().then(() => px)));
-        res.proxy = p;
-        res.shutdown = () => Promise.resolve().then(() => p.shutdown && p.shutdown()).catch(() => {});
+        const px = await nativeTick(() => someip.buildProxy(cfg, String(instance)).then((x) => x.init().then(() => x)));
+        p = px;
+        res.proxy = px;
+        if (stopped) { res.shutdown(); return res; }
         const fields = Object.keys(handlers || {});
-        const fetchAll = () => fields.forEach((f) => {
-            if (cfg.fields && cfg.fields[f] && cfg.fields[f].getter) {
-                p.getValue(f, 3000).then((v) => handlers[f](v)).catch(() => {});
-            }
+        const getters = fields.filter((f) => cfg.fields && cfg.fields[f] && cfg.fields[f].getter);
+        const own = (opts && opts.fieldPollMs) || {};
+        const periodOf = (f) => (own[f] > 0 ? own[f] : opts && opts.pollMs > 0 ? opts.pollMs : 0);
+        // one getValue() per field at a time; its stats in res.reads[f] (no values, a short error text)
+        const errText = (e) => String((e && e.message) || e).split('\n')[0].replace(/[^\x20-\x7e]/g, '?').slice(0, 80);
+        getters.forEach((f) => {
+            res.reads[f] = { ok: 0, failed: 0, consecutiveFailures: 0, dropped: 0, skipped: 0, lastOkAt: null, lastFailAt: null, lastError: null, pendingSince: null };
         });
+        const last = {};
+        const read = (f, t) => {
+            const st = res.reads[f];
+            if (stopped || !st) return;
+            if (st.pendingSince !== null) { st.skipped++; return; }
+            const ep = epoch;
+            st.pendingSince = t;
+            last[f] = t;
+            let q;
+            try { q = Promise.resolve(px.getValue(f, GET_TIMEOUT_MS)); } catch (e) { q = Promise.reject(e); }
+            q.then((v) => {
+                if (stopped) return;
+                // started before a loss of the provider, or answered while it is away: not a sample
+                if (ep !== epoch || !res.available) { st.dropped++; return; }
+                st.ok++; st.consecutiveFailures = 0; st.lastOkAt = Date.now();
+                deliver(f, v);
+            }, (e) => {
+                if (stopped) return;
+                st.failed++; st.consecutiveFailures++; st.lastFailAt = Date.now(); st.lastError = errText(e);
+            }).then(() => { st.pendingSince = null; });
+        };
+        const fetchAll = () => { if (!stopped && res.available) getters.forEach((f) => read(f, Date.now())); };
         await nativeTick(() => {
-            try { return p.subscribeToAvailability((a) => { res.available = !!a; if (a) setImmediate(fetchAll); }); } catch (e) { return null; /* older binding */ }
+            try { return px.subscribeToAvailability((a) => { setAvailable(!!a); if (a) setImmediate(fetchAll); }); } catch (e) { return null; /* older binding */ }
         });
         for (const f of fields) {
+            if (stopped) break;
             try {
-                await nativeTick(() => p.subscribe({ name: f, onReceive: (v) => { try { handlers[f](v); } catch (e) { if (log) log.warn(iface + '.' + f + ': ' + e); } } }));
+                await nativeTick(() => px.subscribe({ name: f, onReceive: (v) => notify(f, v) }));
             } catch (e) {
                 if (log) log.warn('subscribe ' + iface + '.' + f + ': ' + e);
             }
         }
-        if (p.isAvailable && p.isAvailable()) { res.available = true; fetchAll(); }
-        if (opts && opts.pollMs) setInterval(() => { if (res.available) setImmediate(fetchAll); }, opts.pollMs);
+        if (stopped) return res;
+        if (px.isAvailable && px.isAvailable()) { setAvailable(true); fetchAll(); }
+        const polled = getters.filter((f) => periodOf(f) > 0);
+        if (polled.length) {
+            const tick = Math.min.apply(null, polled.map(periodOf));
+            timer = setInterval(() => {
+                if (stopped || !res.available) return;
+                const now = Date.now();
+                // a little slack so a field due on this tick isn't pushed to the next one by timer jitter
+                polled.forEach((f) => { if (last[f] === undefined || now - last[f] >= periodOf(f) - tick / 2) read(f, now); });
+            }, tick);
+        }
     } catch (e) {
         res.error = String(e);
         if (log) log.warn('signals ' + iface + ': ' + e);

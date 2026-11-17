@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { SIGNAL_IDS } from '../../src/domain/signalCatalog';
 import { VehicleAdapter } from '../src/vehicle/adapter';
-import { VEHICLE_FIELDS, VEHICLE_SIGNAL_IDS } from '../src/vehicle/allowlist';
+import { VEHICLE_FIELDS, VEHICLE_INTERFACES, VEHICLE_SIGNAL_IDS } from '../src/vehicle/allowlist';
 import { FakeTransport, flush } from './helpers';
 
 const CDS = 'de.bmw.infotainment.vehicle.CDS';
@@ -160,7 +160,7 @@ describe('VehicleAdapter (только чтение, фальшивый тран
     at(1);
     oldHandlers.forEach((h) => h.statusEngineSpeed2 && h.statusEngineSpeed2({ actualValueRPMEngineCrankshaft: 8000 }));
     assert.equal(a.signals(2)['engine.rpm'].quality, 'unavailable', 'старый генератор подписки не пишет');
-    tr.subs.slice(-5).forEach((s) => s.handlers.statusEngineSpeed2 && s.handlers.statusEngineSpeed2({ actualValueRPMEngineCrankshaft: 4000 }));
+    tr.subs.slice(-VEHICLE_INTERFACES.length).forEach((s) => s.handlers.statusEngineSpeed2 && s.handlers.statusEngineSpeed2({ actualValueRPMEngineCrankshaft: 4000 }));
     assert.equal(a.signals(3)['engine.rpm'].value, 1000);
   });
 

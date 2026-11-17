@@ -35,13 +35,17 @@ describe('app.json', () => {
     assert.equal(m.id, APP_ID);
     assert.equal(m.id, 'xdrive_offroad_pro');
     assert.equal(m.title, APP_TITLE);
-    assert.equal(m.title, 'xDrive Offroad Pro');
+    assert.equal(m.title, 'Terrain Monitor', 'отображаемое имя — как заголовок веб-шапки');
+    assert.match(String((m as unknown as { description: string }).description), /^xDrive Offroad Pro — /, 'подзаголовок — в описании');
     assert.equal(m.loggingId, LOGGING_ID);
     assert.match(m.loggingId, /^[A-Z0-9]{4}$/);
     assert.deepEqual(m.mguHmi, ['ID7']);
     assert.deepEqual(m.requires, { 'mgu-render': '0.6.21' });
     assert.deepEqual(m.requires, { ...REQUIRES });
     assert.doesNotMatch(JSON.stringify(m), /idrive7-renderd|2\.1\.15/, 'старый рендерер нигде не упомянут');
+    assert.equal((m as unknown as { version: string }).version, '0.1.1');
+    assert.equal((m as unknown as { screens: { title: string }[] }).screens[0].title, APP_TITLE, 'заголовок экрана = имя приложения');
+    assert.equal(nativeRu.app.title, APP_TITLE);
     assert.equal(m.autostart, undefined);
   });
 
@@ -143,9 +147,9 @@ describe('app.json', () => {
 });
 
 describe('каталог приложения: файлы и MIT-уведомление', () => {
-  it('APP_FILES: свои файлы + NOTICE; ни GPL-рендерера, ни шрифтов', () => {
+  it('APP_FILES: свои файлы + NOTICE + icon.png; ни GPL-рендерера, ни шрифтов', () => {
     assert.equal(LICENSE_FILE, 'NOTICE', 'build.py копирует только точные LICENSE/NOTICE');
-    assert.deepEqual([...APP_FILES], ['app.json', 'main.js', 'assets.js', 'NOTICE']);
+    assert.deepEqual([...APP_FILES], ['app.json', 'main.js', 'assets.js', 'NOTICE', 'icon.png']);
     for (const f of APP_FILES) assert.doesNotMatch(f, /renderd|mgu-render|gpl|\.(ttf|otf|woff2?)$|font/i, f);
   });
 

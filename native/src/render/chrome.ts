@@ -1,5 +1,7 @@
-// Постоянные элементы: бейдж режима в заголовке (G.frame) и нижняя полоса —
-// «Сценарий демо» как в браузере, или статус режима чтения автомобиля.
+// Постоянные элементы: бейдж режима в заголовке (G.frame) и нижняя строка статуса — «Сценарий демо»
+// как в браузере, или статус режима чтения автомобиля. Кнопок в строке нет: пауза, новая сессия и
+// сценарий — в «Настройках» (касанием, где kit ведёт экран) или на кнопках HMI (запасной путь).
+// Где касания нет, строка честно говорит почему (inputNote).
 
 import { sessionElapsedMs } from '../../../src/domain/session';
 import { formatDuration } from '../format';
@@ -22,15 +24,11 @@ export function badges(state: NativeState): Badge[] {
   return [state.vehicle && state.vehicle.hasUsableData ? { text: n.badge.vehicle, color: C.cold } : { text: n.badge.vehicleNoData, color: C.warn }];
 }
 
-export type ToolbarButton = (x: number, y: number, w: number, h: number, label: string, run: () => unknown, key: string, primary?: boolean) => number;
-
-export interface ToolbarActions {
-  togglePause(): void;
-  newSession(): void;
-  nextScenario(): void;
-}
-
-export function toolbar(cv: Surface, state: NativeState, button: ToolbarButton | null, act: ToolbarActions): void {
+/**
+ * Строка статуса внизу страницы. inputNote — почему касания нет (null — kit ведёт экран, всё касанием):
+ * показывается вместо описания сценария / сообщения режима чтения.
+ */
+export function toolbar(cv: Surface, state: NativeState, inputNote: string | null = null): void {
   const y = BAR_Y;
   cv.fillRect(0, y - 3, W, 1, C.hair);
   const base = y + BAR_H / 2 + 6;
@@ -38,15 +36,7 @@ export function toolbar(cv: Surface, state: NativeState, button: ToolbarButton |
   if (state.mode === 'demo') {
     x += caps(cv, n.toolbar.demoTitle, x, base, 14, C.warn) + 18;
     const sc = T.scenarios[state.scenarioId];
-    if (button) {
-      x += button(x, y + 2, 156, BAR_H - 4, state.paused ? n.buttons.resume : n.buttons.pause, act.togglePause, 'tb-pause', state.paused) + 8;
-      x += button(x, y + 2, 170, BAR_H - 4, n.buttons.newSession, act.newSession, 'tb-session') + 8;
-      // w = 0: G.button сам берёт ширину по подписи (явную ширину он не подгоняет под текст),
-      // самое длинное — «Диагональное вывешивание».
-      x += button(x, y + 2, 0, BAR_H - 4, `${n.buttons.scenario}: ${sc.name}`, act.nextScenario, 'tb-scenario') + 14;
-    } else {
-      x += text(cv, sc.name, x, base, 17, C.text) + 14;
-    }
+    x += text(cv, sc.name, x, base, 17, C.text) + 14;
     const right = W - M - 4;
     const timeLabel = `${n.toolbar.simTime} `;
     const time = formatDuration(state.snapshot.simTimeMs);
@@ -59,11 +49,10 @@ export function toolbar(cv: Surface, state: NativeState, button: ToolbarButton |
     const lw = width(cv, timeLabel, 14);
     text(cv, timeLabel, right - tagW - 10 - tw - 4, base, 14, C.dim, { align: 'right' });
     const room = right - tagW - 24 - tw - lw - x;
-    if (room > 120) text(cv, clip(cv, sc.description, 14, room), x, base, 14, C.dim);
+    if (room > 120) text(cv, clip(cv, inputNote ?? sc.description, 14, room), x, base, 14, inputNote ? C.warn : C.dim);
     return;
   }
   x += caps(cv, n.toolbar.vehicleTitle, x, base, 14, C.cold) + 18;
-  if (button) x += button(x, y + 2, 170, BAR_H - 4, n.buttons.newSession, act.newSession, 'tb-session') + 14;
   const right = W - M - 4;
   const time = formatDuration(sessionElapsedMs(state.session, state.snapshot.simTimeMs));
   const tw = width(cv, time, 17);
@@ -76,7 +65,7 @@ export function toolbar(cv: Surface, state: NativeState, button: ToolbarButton |
       ? n.toolbar.vehicleCandidate
       : n.toolbar.vehicleWaiting;
   const room = right - tw - lw - 20 - x;
-  if (room > 120) text(cv, clip(cv, msg, 14, room), x, base, 14, v && v.errors.length ? C.warn : C.dim);
+  if (room > 120) text(cv, clip(cv, inputNote ?? msg, 14, room), x, base, 14, inputNote || (v && v.errors.length) ? C.warn : C.dim);
 }
 
 /** Обрезать строку по ширине с многоточием. */

@@ -4,7 +4,7 @@
 // Семантика как у src/i18n/format.ts: stale/invalid/unavailable никогда не показываются числом.
 
 import { usableValue } from '../../src/domain/signal';
-import type { Quality, Signal } from '../../src/domain/types';
+import type { Quality, RuntimeSource, Signal } from '../../src/domain/types';
 import { DASH, formatDuration } from '../../src/i18n/format';
 
 export { DASH, formatDuration };
@@ -46,3 +46,14 @@ export function shownSignal<T>(signal: Signal<T>, render: (v: T) => string): Sho
 export const shownNumber = (s: Signal<number>, decimals = 0, signed = false): Shown => shownSignal(s, (v) => formatNumber(v, decimals, signed));
 
 export const NONE: Shown = { text: DASH, quality: 'unavailable', ok: false };
+
+/**
+ * Источник значения — только если значение есть (свежее или устаревшее, конечное). runtimeSource — классификация
+ * пути сигнала, а не доказательство данных: сигнал unavailable / invalid / ни разу не приходивший источника не имеет.
+ */
+export function presentSource(s: Signal<unknown>): RuntimeSource | null {
+  if (s.value === null || s.value === undefined) return null;
+  if (s.quality !== 'valid' && s.quality !== 'stale') return null;
+  if (typeof s.value === 'number' && !Number.isFinite(s.value)) return null;
+  return s.runtimeSource;
+}

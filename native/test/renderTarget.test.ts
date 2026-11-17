@@ -7,24 +7,27 @@ import { startApp } from '../src/app';
 import type { Kit } from '../src/platform/kit';
 import type { Surface } from '../src/platform/kitTypes';
 import { IMAGE_ID } from '../src/assets/spec';
-import { RENDER_PROTO, RENDER_SOCKET, selectRenderTarget, type Env } from '../src/renderTarget';
-import { fakeCtx, FakeTransport, flush, hasUpstream, loadUpstream, loadUpstreamDisplay, syntheticAssets } from './helpers';
+import { RENDER_SOCKET, selectRenderTarget, type Env } from '../src/renderTarget';
+import { fakeCtx, FakeTransport, flush, stageVendorKit, syntheticAssets } from './helpers';
 
 const KEYS = ['MGU_RENDERD_PROTO', 'MGU_RENDERD_SOCKET'] as const;
 const HELLO = 1;
-const IMAGE = 9; // upstream IMAGE (mgu-render 0.6.21 PROTOCOL.md: 9 = IMAGE для upstream-соединения)
+const IMAGE_UPSTREAM = 9; // upstream IMAGE (mgu-render 0.6.21 PROTOCOL.md: 9 = IMAGE для upstream-соединения)
+const IMAGE_NATIVE = 10; // iterio / mgu-render/1 IMAGE (premultiplied RGBA)
 const X_MODE = 0x4d520001; // mgu-render/1
 
 describe('selectRenderTarget: только окружение процесса', () => {
-  it('диалект всегда upstream; сокет mgu-render, если не задан снаружи', () => {
+  it('диалект не навязывается (kit просит mgu-render/1); сокет mgu-render, если не задан снаружи', () => {
     const env: Env = {};
     selectRenderTarget(env);
-    assert.deepEqual(env, { MGU_RENDERD_PROTO: 'upstream', MGU_RENDERD_SOCKET: '/run/mgu-render/render.sock' });
-    assert.equal(RENDER_PROTO, 'upstream');
+    assert.deepEqual(env, { MGU_RENDERD_SOCKET: '/run/mgu-render/render.sock' });
     assert.equal(RENDER_SOCKET, '/run/mgu-render/render.sock');
-    const emu: Env = { MGU_RENDERD_SOCKET: '/tmp/emu/render.sock', MGU_RENDERD_PROTO: 'native', MGU_RENDERD_FILE: '/tmp/x.rd', MGU_RENDERER: 'software' };
+    const emu: Env = { MGU_RENDERD_SOCKET: '/tmp/emu/render.sock', MGU_RENDERD_FILE: '/tmp/x.rd', MGU_RENDERER: 'software' };
     selectRenderTarget(emu);
-    assert.deepEqual(emu, { MGU_RENDERD_SOCKET: '/tmp/emu/render.sock', MGU_RENDERD_PROTO: 'upstream', MGU_RENDERD_FILE: '/tmp/x.rd', MGU_RENDERER: 'software' });
+    assert.deepEqual(emu, { MGU_RENDERD_SOCKET: '/tmp/emu/render.sock', MGU_RENDERD_FILE: '/tmp/x.rd', MGU_RENDERER: 'software' });
+    const forced: Env = { MGU_RENDERD_PROTO: 'upstream' };
+    selectRenderTarget(forced);
+    assert.equal(forced.MGU_RENDERD_PROTO, 'upstream', 'явный upstream снаружи (отладка) сохраняется');
   });
 });
 
@@ -52,8 +55,9 @@ function parse(b: Buffer): Msg[] {
 
 /**
  * Кадр «Рельефа» (рендер привода и приборы — растровые изображения) записывается настоящим Recorder и
- * отправляется соединением, которое создаёт Display.prototype._startGpu закреплённого display.js — в режиме
- * записи в файл (как MGU_RENDERD_FILE / kit/tools/preview.js --gpu). Окружение — как его выставит main.js.
+ * отправляется соединением, которое создаёт Display.prototype._startGpu ВЕНДОРНОГО display.js (то, что уходит
+ * в пакет) — в режиме записи в файл (как MGU_RENDERD_FILE / kit/tools/preview.js --gpu). Окружение — как его
+ * выставит main.js.
  */
 async function recordFrame(env: Env, tab = 0): Promise<{ msgs: Msg[]; drawn: number[]; warnings: string[] }> {
   const saved: Env = {};
@@ -61,9 +65,10 @@ async function recordFrame(env: Env, tab = 0): Promise<{ msgs: Msg[]; drawn: num
   for (const k of KEYS) delete process.env[k];
   Object.assign(process.env, env);
   const dir = mkdtempSync(join(tmpdir(), 'xop-rd-'));
+  const vk = stageVendorKit();
   try {
-    const up = loadUpstream();
-    const { display } = loadUpstreamDisplay();
+    const up = { record: vk.req('./record.js'), G: vk.req('./gauges.js') };
+    const display = vk.req('./display.js');
     const kit: Kit = { mgu: { run: () => undefined }, G: up.G, record: { setImage: up.record.setImage } };
     const ctx = fakeCtx(new FakeTransport(), {}, { own: false });
     ctx.canvas = () => new up.record.Recorder(1600, 520) as Surface;
@@ -105,6 +110,7 @@ async function recordFrame(env: Env, tab = 0): Promise<{ msgs: Msg[]; drawn: num
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    vk.cleanup();
     for (const k of KEYS) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
@@ -112,40 +118,43 @@ async function recordFrame(env: Env, tab = 0): Promise<{ msgs: Msg[]; drawn: num
   }
 }
 
-describe('запись кадра настоящим display.js/renderd.js (MIT kit/runtime)', { skip: hasUpstream ? false : 'нет checkout idrive7-apps (MGU_UPSTREAM)' }, () => {
-  it('с окружением main.js: HELLO без mgu-render/1, все растры кадра уходят сообщениями IMAGE с пикселями', async () => {
+describe('запись кадра настоящим вендорным display.js/renderd.js (MIT kit/runtime)', () => {
+  const images = (msgs: Msg[], type: number) => msgs.filter((m) => m.type === type).map((m) => ({ id: m.payload.readUInt32LE(0), w: m.payload.readUInt32LE(4), h: m.payload.readUInt32LE(8), len: m.payload.length, px: m.payload.subarray(12) }));
+
+  it('с окружением main.js: HELLO mgu-render/1, все растры кадра уходят IMAGE 10, предупреждения о потере нет', async () => {
     const env: Env = {};
     selectRenderTarget(env);
     const { msgs, drawn, warnings } = await recordFrame(env);
     assert.deepEqual([...drawn].sort((a, b) => a - b), [IMAGE_ID.xray, IMAGE_ID.dialPitch, IMAGE_ID.dialRoll].sort((a, b) => a - b), `кадр Terrain: xray + 2 шкалы (${drawn.join(',')})`);
-    const hello = msgs.find((m) => m.type === HELLO)!;
-    assert.equal(hello.payload.toString('utf8').replace(/\0+$/, ''), 'xdrive_offroad_pro', 'обычный HELLO (upstream)');
-    assert.ok(!msgs.some((m) => m.type === X_MODE), 'нет сообщений mgu-render/1');
-    const images = msgs.filter((m) => m.type === IMAGE).map((m) => ({ id: m.payload.readUInt32LE(0), w: m.payload.readUInt32LE(4), h: m.payload.readUInt32LE(8), len: m.payload.length, px: m.payload.subarray(12) }));
-    const uploaded = images.map((i) => i.id);
+    assert.match(msgs.find((m) => m.type === HELLO)!.payload.toString('utf8'), /^xdrive_offroad_pro\0proto=mgu-render\/1/);
+    assert.ok(msgs.some((m) => m.type === X_MODE), 'X_MODE (mgu-render/1)');
+    const pics = images(msgs, IMAGE_NATIVE);
+    const uploaded = pics.map((i) => i.id);
     for (const id of drawn) assert.ok(uploaded.includes(id), `растр ${id} кадра загружен (${uploaded.join(',')})`);
     assert.equal(new Set(uploaded).size, uploaded.length, 'каждый растр — один раз');
-    for (const im of images) {
+    for (const im of pics) {
+      assert.ok(im.w <= 1024 && im.h <= 1024, `IMAGE ${im.id}: ${im.w}×${im.h} ≤ 1024`);
       assert.equal(im.len, 12 + im.w * im.h * 4, `IMAGE ${im.id}: ${im.w}×${im.h} RGBA`);
       assert.ok(im.px.some((b) => b !== 0), `IMAGE ${im.id}: пиксели не пусты`);
     }
-    assert.ok(!warnings.some((w) => /pixel images need the upstream dialect/.test(w)), warnings.join('; '));
+    assert.equal(images(msgs, IMAGE_UPSTREAM).length, 0, 'в mgu-render/1 сообщение 9 — CLAIM, не растр');
+    assert.ok(!warnings.some((w) => /pixel images/.test(w)), warnings.join('; '));
   });
 
-  it('Traction: компактная схема — xray загружен в записи настоящим Recorder', async () => {
+  it('Traction: xray загружен IMAGE 10', async () => {
     const env: Env = {};
     selectRenderTarget(env);
     const { msgs, drawn } = await recordFrame(env, 1);
     assert.ok(drawn.includes(IMAGE_ID.xray), `кадр Traction рисует xray: ${drawn.join(',')}`);
-    const uploaded = msgs.filter((m) => m.type === IMAGE).map((m) => m.payload.readUInt32LE(0));
-    assert.ok(uploaded.includes(IMAGE_ID.xray), `xray загружен: ${uploaded.join(',')}`);
+    assert.ok(images(msgs, IMAGE_NATIVE).some((i) => i.id === IMAGE_ID.xray));
   });
 
-  it('контроль: без выбора диалекта kit просит mgu-render/1 и растры теряются (то, от чего защищает bootstrap)', async () => {
-    const { msgs, drawn, warnings } = await recordFrame({});
-    assert.ok(drawn.includes(IMAGE_ID.xray));
-    assert.match(msgs.find((m) => m.type === HELLO)!.payload.toString('utf8'), /proto=mgu-render\/1/);
-    assert.equal(msgs.filter((m) => m.type === IMAGE).length, 0);
-    assert.ok(warnings.some((w) => /pixel images need the upstream dialect/.test(w)));
+  it('явный MGU_RENDERD_PROTO=upstream (отладка): обычный HELLO, растры — IMAGE 9', async () => {
+    const { msgs, drawn } = await recordFrame({ MGU_RENDERD_PROTO: 'upstream' });
+    assert.equal(msgs.find((m) => m.type === HELLO)!.payload.toString('utf8').replace(/\0+$/, ''), 'xdrive_offroad_pro');
+    assert.ok(!msgs.some((m) => m.type === X_MODE));
+    const uploaded = images(msgs, IMAGE_UPSTREAM).map((i) => i.id);
+    for (const id of drawn) assert.ok(uploaded.includes(id));
+    assert.equal(images(msgs, IMAGE_NATIVE).length, 0);
   });
 });

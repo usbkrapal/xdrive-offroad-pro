@@ -112,6 +112,7 @@ class Display {
         this.sheet = null;                           // sheet.js page drawn over the app's (openSheet)
         this.ccuLast = null;                         // last controller state (knob counter, press, push)
         this.ownHidden = new Set();                  // more bar buttons left out where the kit runs the screen (hideButton)
+        this.brand = null;                           // the app's brand at the header's start: { width(c), draw(c, x, y, w, h, theme) }
         G.onConfirm(() => { this.lastWords = null; this.tickHandlers.forEach((fn) => fn()); });   // a reset asks / runs out
         const canvasScreens = (spec.screens || []).filter((s) => s.kind === 'canvas');
         this.screen = canvasScreens[0] || null;
@@ -831,9 +832,22 @@ class Display {
         const tb = this.own() ? this._tabList() : r.chrome.tabs || { tabs: [], sel: -1, badges: [] };
         // compact header in the HMI strip's own black, only as wide as its name, tabs and badges:
         // right of it the HMI's strip shows through (radio station, phone signal, status icons)
-        const hx = HMI.left - pl.x;
-        const end = G.header(c, Object.assign({}, t, { bg: HMI.headBg }), hx, 0, HMI.status.x - pl.x - hx, FULL.headH,
-            this.screen.title || this.spec.title, tb.tabs, tb.sel, tb.badges, true, true);
+        const hx = HMI.left - pl.x, ht = Object.assign({}, t, { bg: HMI.headBg }), title = this.screen.title || this.spec.title;
+        // the app's brand (display.brand) first, in place of the name, always shown: where the tabs would not all
+        // fit beside it, the badges leave the header (the app shows its mode elsewhere), never the brand or a tab
+        let bw = 0;
+        if (this.brand) { try { bw = Math.max(0, Math.ceil(this.brand.width(c)) || 0); } catch (e) { this.log.warn('display: brand ' + e); } }
+        this.headBadges = true;
+        let end = G.header(c, ht, hx + bw, 0, HMI.status.x - pl.x - hx - bw, FULL.headH, bw ? '' : title, tb.tabs, tb.sel, tb.badges, true, true);
+        if (bw && (c.tabRects || []).length < tb.tabs.length && tb.badges.length) {
+            c.reset(); this.headBadges = false;
+            end = G.header(c, ht, hx + bw, 0, HMI.status.x - pl.x - hx - bw, FULL.headH, '', tb.tabs, tb.sel, [], true, true);
+        }
+        if (bw) {
+            c.fillRect(hx, 0, bw, FULL.headH - 2, HMI.headBg);
+            c.fillRect(hx, FULL.headH - 2, bw, 2, G.withAlpha('#ffffff', 0.22));
+            try { this.brand.draw(c, hx, 0, bw, FULL.headH, t); } catch (e) { this.log.warn('display: brand ' + e); }
+        }
         // the HMI's own title is in the strip under the header: a narrower header (a sheet: no tabs) stays
         // as wide as the app's widest, so none of that title shows beside it
         if (!this.sheet) this.headMax = Math.max(this.headMax || 0, end);
