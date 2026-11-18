@@ -419,7 +419,8 @@ describe('журнал приложения (обычный режим): тол�
 
 describe('UDS: модель и интерфейс', () => {
   it('модель: EGS → температура масла АКПП, DSC → скорости колёс и давление контуров; VDP — нет данных; источник поля виден', async () => {
-    const f = fakeTasu(carResponder({ '30:f150': { nrc: 0x11 } }));
+    // блоки, которых нет в этой подделке (GHAS, BDC, ACSM), отвечают отказом сразу: иначе каждый держит реальную шину 1,5 с
+    const f = fakeTasu(carResponder({ '30:f150': { nrc: 0x11 }, 'f:f150': { nrc: 0x11 }, '40:f150': { nrc: 0x11 }, '1:f150': { nrc: 0x11 } }));
     let t = 1000;
     const model = new NativeModel({ now: () => t, watch: new FakeTransport().watch, tasu: f.signals }, 'vehicle');
     model.setVisible(true);
@@ -668,5 +669,132 @@ describe('UDS: записи по варианту и ответ «нет отв�
     assert.equal(vdp.state, 'failed');
     assert.match(String(vdp.reason), /нет ответа/);
     assert.doesNotMatch(JSON.stringify(d), /не установлен/);
+  });
+});
+
+/* ---------------- расписание: измеренная нагрузка шины (виртуальное время) ---------------- */
+
+describe('UDS: расписание на последовательной шине (G07, виртуальное время)', () => {
+  /** Ответы G07: опознаны DSC IB_G05, EGS GSZFB1, EPS, LMV, VDP, BDC; GHAS и ACSM молчат (не отвечают вообще). */
+  function g07Bus(opts: { latencyMs: number; silentDid?: string }) {
+    const ID: Record<number, number[]> = {
+      0x29: [0x0f, 0x25, 0x00],
+      0x18: [0x0f, 0x21, 0xd0],
+      0x30: [0x0f, 0x25, 0x80],
+      0x19: [0x0f, 0x21, 0x80],
+      0x76: [0x0f, 0x1f, 0x50],
+      0x40: [0x0f, 0x26, 0x80],
+    };
+    const wheels = [...be16(1500), ...be16(1510), ...be16(1490), ...be16(1505), ...be16(1500), 1, 1, 1, 1, 1, 100, 100, 100, 100];
+    const data: Record<string, readonly number[]> = {
+      '29:dbe4': wheels,
+      '29:db29': [...be16(2), ...be16(0)],
+      '29:dc6e': [1, 0, 0],
+      '29:dc6d': [1, 0, 0],
+      '29:dc6c': [1, 0, 0],
+      '29:dc70': [1, 0, 0],
+      '18:da12': [0x00, 0x57],
+      '30:db57': [0, 0, 0, 0, 0, 0, 3],
+      '19:db32': [...be16(400), 0, 2, 0, 0, 0, 2],
+      '76:dc05': [...f32(0.01), ...f32(0.01), ...f32(0.01), ...f32(0.01)],
+      '76:dc06': [0, 0, 0, 0, 0, 0, 0, 0],
+      '76:dc31': [1, 1, 1, 1],
+      '76:d8ec': be16(8),
+      '40:e468': [0x04],
+      '40:d54d': [...be16(0), ...be16(0), 1, 22, ...be16(-10 & 0xffff), ...be16(0), ...be16(0), ...be16(0)],
+    };
+    let now = 0;
+    const port = {
+      available: true,
+      close: () => undefined,
+      read: async (ecu: number, did: number): Promise<ReadResult> => {
+        const k = `${ecu.toString(16)}:${did.toString(16)}`;
+        if (did === 0xf150) {
+          if (!ID[ecu]) return (now += 1500), { kind: 'timeout' };
+          now += opts.latencyMs;
+          return { kind: 'ok', payload: ID[ecu] };
+        }
+        if (k === opts.silentDid || !data[k]) return (now += 1500), { kind: 'timeout' };
+        now += opts.latencyMs;
+        return { kind: 'ok', payload: data[k] };
+      },
+    };
+    const out: UdsOutput[] = [];
+    const r = new UdsReader(port, () => now, (o) => out.push(o));
+    (r as unknown as { running: boolean }).running = true;
+    const run = async (untilMs: number) => {
+      while (now < untilMs) {
+        const did = await r.step();
+        now += did ? 150 : 100; // GAP_MS / ожидание, как в run()
+      }
+    };
+    return { r, out, run, now: () => now };
+  }
+
+  /** Самая большая доля срока свежести между соседними значениями цели после разогрева (≤ 1 — ни разу не устарело). */
+  function worst(out: readonly UdsOutput[], id: string, fromMs: number): { ratio: number; n: number } {
+    const xs = out.filter((o) => o.target.id === id && o.at >= fromMs && !o.absent);
+    let ratio = 0;
+    for (let i = 1; i < xs.length; i++) ratio = Math.max(ratio, (xs[i].at - xs[i - 1].at) / xs[i - 1].staleMs);
+    return { ratio, n: xs.length };
+  }
+
+  /** Промежутки между значениями цели после разогрева: медиана, p95, наибольший, мс. */
+  function intervals(out: readonly UdsOutput[], id: string, fromMs: number): { median: number; p95: number; max: number } {
+    const xs = out.filter((o) => o.target.id === id && o.at >= fromMs && !o.absent).map((o) => o.at);
+    const d = xs.slice(1).map((t, i) => t - xs[i]).sort((a, b) => a - b);
+    const q = (p: number) => d[Math.min(d.length - 1, Math.floor(p * d.length))];
+    return { median: q(0.5), p95: q(0.95), max: d[d.length - 1] };
+  }
+
+  it('промежутки чтения колёс (ответ 80 мс, GHAS/ACSM молчат): медиана ≈ периоду, p95 и наибольший ограничены; в диагностике — измеренное', async () => {
+    const { r, out, run } = g07Bus({ latencyMs: 80 });
+    await run(300000);
+    const w = intervals(out, 'wheelSpeed.FL', 30000);
+    const dsc = r.diagnostics().find((e) => e.key === 'DSC')!.records.find((x) => x.did === 'DBE4')!;
+    console.log(`wheelSpeed.FL interval ms: median ${w.median} p95 ${w.p95} max ${w.max}; period ${dsc.periodMs}; bus ${JSON.stringify(r.bus())}`);
+    assert.ok(w.median <= dsc.periodMs * 1.3, `медиана ${w.median} ≤ 1,3 × период ${dsc.periodMs}`);
+    assert.ok(w.p95 <= dsc.periodMs * 2, `p95 ${w.p95}`);
+    // повтор молчащей идентификации — наравне с записями, не вперёд всех: наибольший промежуток ≤ 2 периода + один тайм-аут
+    assert.ok(w.max <= 2 * dsc.periodMs + 2000, `наибольший ${w.max}`);
+    assert.ok(dsc.intervalMs !== null && dsc.maxIntervalMs >= w.max - 1, 'измеренный промежуток в диагностике');
+  });
+
+  for (const latencyMs of [80, 200, 350]) {
+    it(`задержка ответа ${latencyMs} мс: показываемые величины не устаревают между чтениями; молчащие GHAS/ACSM не отнимают шину`, async () => {
+      const { r, out, run } = g07Bus({ latencyMs });
+      await run(180000);
+      for (const id of ['wheelSpeed.FL', 'rideHeightSensor.FL', 'brakePressure.system', 'temperature.gearboxC', 'driveMode', 'pitchVsAxlesDeg']) {
+        const w = worst(out, id, 30000);
+        assert.ok(w.n >= 5, `${id}: значения идут (${w.n})`);
+        assert.ok(w.ratio <= 1, `${id}: промежуток между чтениями ${w.ratio.toFixed(2)} × срок свежести (бюджет ${JSON.stringify(r.bus())})`);
+      }
+      // кандидаты (квалификаторы не описаны) — «нет данных», не ошибка
+      const fdr = out.filter((o) => o.target.id === 'dsc.fdr').slice(-1)[0];
+      assert.ok(fdr && fdr.absent && fdr.value === null, 'DSC FDR: нет данных (кандидат), не недопустимое значение');
+      const lmv = out.filter((o) => o.target.id === 'xdrive.frontTorqueNm').slice(-1)[0];
+      assert.ok(lmv && lmv.absent, 'LMV: момент не установлен — нет данных');
+      // записи «только диагностика» — редко
+      const eps = r.diagnostics().find((e) => e.key === 'EPS')!.records[0];
+      assert.ok(eps.periodMs >= 20000, `EPS DB57 только диагностика: ${eps.periodMs} мс`);
+    });
+  }
+
+  it('очень медленная шина (ответ 3 с): срок свежести не растягивается сверх 10 с — значения честно устаревают', async () => {
+    const { r, out, run } = g07Bus({ latencyMs: 3000 });
+    await run(240000);
+    const xs = out.filter((o) => o.target.id === 'wheelSpeed.FL' && !o.absent);
+    assert.ok(xs.every((o) => o.staleMs <= 10000), 'срок свежести не больше MAX_STALE_MS');
+    assert.ok(worst(out, 'wheelSpeed.FL', 30000).ratio > 1, 'между чтениями дольше срока — показ «устарело», не подделка свежести');
+    assert.ok(r.bus().floorMs > 3000);
+  });
+
+  it('молчащая запись опознанного блока (DB29) не забивает шину: отсрочка, колёса остаются свежими', async () => {
+    const { out, run } = g07Bus({ latencyMs: 150, silentDid: '29:db29' });
+    await run(180000);
+    const w = worst(out, 'wheelSpeed.FL', 30000);
+    assert.ok(w.ratio <= 1, `колёса: ${w.ratio.toFixed(2)}`);
+    // DB29 — без значений (устаревает честно), но не каждые 500 мс
+    assert.equal(out.filter((o) => o.target.id === 'brakePressure.system' && o.value !== null).length, 0);
   });
 });

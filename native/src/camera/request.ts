@@ -7,7 +7,10 @@
 //   TOPREARVIEW 1, SIDEVIEW 2, RFK 3, OFFROAD 20, REMOTE360 60. Виды: 1 передняя, 2 задняя, 3 левая, 4 правая,
 //   5 передняя+задняя (кадры 5/6), 6 левая+правая (7/8), 7 все (9/10).
 // Правила (решает decide(), чистая функция с тестами):
-//   - во время штатного обзора и пока блок не готов — ни одного запроса; свой cookie при штатном обзоре отпускается;
+//   - во время штатного обзора — ни одного запроса; свой cookie при штатном обзоре отпускается;
+//   - блок не готов (SIGNAL_UNFILLED/255): на iDrive 7 он запускается только после attach (Drive Recorder: около 10 с
+//     «CAMERA_INITIALIZING» после attach) — без чужого клиента ждать бесполезно. Поэтому attach косвенным клиентом
+//     (в пределах попыток), вид — только когда блок станет готов; не готов за ATTACH_READY_MS — cookie отпускается;
 //   - если уже идёт DR_ACTIVE с видом, кадры которого источник умеет брать, — только слушаем (ничего не запрашиваем);
 //   - чужой DR_ACTIVE с другим видом (обычно Drive Recorder пишет «все камеры») не переопределяется;
 //   - запрос — когда страница открыта, блок готов, нет штатного обзора и нет DR_ACTIVE (ни чужого, ни своего с другим
@@ -63,7 +66,32 @@ export const notReady = (s: CamState) => /^(SIGNAL_UNFILLED|255)$/.test(s.applic
 export const parking = (s: CamState) => PARKING.test(s.application);
 export const drActive = (s: CamState) => /^(DR_ACTIVE|51)$/.test(s.application);
 
-export type Decision = { readonly act: 'none'; readonly why: string } | { readonly act: 'request'; readonly view: number; readonly why: string } | { readonly act: 'release'; readonly why: string };
+export type StateSource = 'XView3D' | 'ICAM2';
+/**
+ * Одно состояние камер из двух живых источников (снимок пропавшего провайдера сюда не передаётся). Главнее то, что
+ * осторожнее для штатных видов: штатный обзор у ЛЮБОГО источника, затем DR_ACTIVE, затем иное допустимое, и лишь
+ * потом «не готов». Так незаполненный XView3D (SIGNAL_UNFILLED/255) не закрывает допустимое состояние ICAM2, а штатный
+ * обзор, о котором сообщил только один источник, не теряется. Равные — XView3D (как у Drive Recorder).
+ */
+export function arbitrate(xv: CamState | null, icam: CamState | null): { state: CamState | null; source: StateSource | null } {
+  const rank = (s: CamState) => (parking(s) ? 0 : drActive(s) ? 1 : notReady(s) ? 3 : 2);
+  if (xv && (!icam || rank(xv) <= rank(icam))) return { state: xv, source: 'XView3D' };
+  if (icam) return { state: icam, source: 'ICAM2' };
+  return { state: null, source: null };
+}
+
+/**
+ * iDrive 7: блок камер запускается ПОСЛЕ attach (Drive Recorder recorder.js: «CAMERA_INITIALIZING for about 10 s after
+ * the attach», SIGNAL_UNFILLED / perspective 255, запрошенное в это время отбрасывается). Без чужого клиента состояние
+ * «не готов» само не проходит: attach нужен, чтобы блок стал готов. Столько ждём готовности после своего attach.
+ */
+export const ATTACH_READY_MS = 20000;
+
+export type Decision =
+  | { readonly act: 'none'; readonly why: string }
+  | { readonly act: 'request'; readonly view: number; readonly why: string }
+  | { readonly act: 'attach'; readonly why: string }
+  | { readonly act: 'release'; readonly why: string };
 
 export interface DecideInput {
   readonly wanted: boolean;
@@ -79,6 +107,8 @@ export interface DecideInput {
   readonly requestEnabled?: boolean;
   /** Дополнительные application, при которых не просить (наблюдённые занятые; XOP_CAM_BUSY). */
   readonly busyApps?: readonly string[];
+  /** Свой cookie взят, а блок так и не стал готов за ATTACH_READY_MS. */
+  readonly attachWaitOver?: boolean;
 }
 
 export function decide(i: DecideInput): Decision {
@@ -87,10 +117,24 @@ export function decide(i: DecideInput): Decision {
   const s = i.state;
   if (!s) return { act: 'none', why: 'состояния камер нет' };
   if (parking(s)) return i.ownCookie ? { act: 'release', why: `штатный обзор (${s.application}): уступаем` } : { act: 'none', why: `штатный обзор (${s.application})` };
-  if (notReady(s)) return { act: 'none', why: 'блок камер не готов' };
   if (!i.need || !i.need.accept.length) return i.ownCookie ? { act: 'release', why: 'источника кадров нет' } : { act: 'none', why: 'источника кадров нет' };
+  if (notReady(s)) {
+    // iDrive 7: блок запускается только после attach (ATTACH_READY_MS); вид просим, когда станет готов
+    if (i.ownCookie) {
+      return i.attachWaitOver
+        ? { act: 'release', why: `блок камер не стал готов за ${ATTACH_READY_MS / 1000} с после attach: отпускаем` }
+        : { act: 'none', why: 'блок камер запускается после attach: ждём готовности' };
+    }
+    if (!i.need.request) return { act: 'none', why: 'блок камер не готов; источник не просит вид' };
+    if (i.requestEnabled === false) return { act: 'none', why: 'блок камер не готов; запрос выключен разработчиком (XOP_CAM_REQUEST=off)' };
+    if (!i.triesLeft) return { act: 'none', why: `блок камер не готов; попытки исчерпаны: повтор через ${RETRY_MS / 1000} с` };
+    return { act: 'attach', why: `блок камер не готов (${s.application}/${s.perspective}): attach косвенным клиентом, чтобы он запустился` };
+  }
   if (drActive(s) && i.need.accept.indexOf(s.perspective) >= 0) return { act: 'none', why: `вид ${s.perspective} уже идёт: только слушаем` };
-  if (drActive(s)) {
+  // DR_ACTIVE с видом 0: запрос ещё не применён (чёрная заливка; 0 — не вид, его никто не просит) — при своём cookie
+  // просим снова в пределах попыток, а не отпускаем как «чужую смену вида»
+  const unapplied = drActive(s) && s.perspective === 0 && i.ownCookie;
+  if (drActive(s) && !unapplied) {
     if (i.ownCookie && i.verifying) return { act: 'none', why: `ждём вид ${i.ownView}` };
     if (i.ownCookie) return { act: 'release', why: `вид сменён на ${s.perspective} не нами: не спорим` };
     return { act: 'none', why: `камеры заняты видом ${s.perspective} (Drive Recorder или другое приложение): не переопределяем` };
@@ -167,11 +211,17 @@ export class CameraRequest {
   private icamSub: WatchResult | null = null;
   private icamUp = false;
   private icamLosses = 0;
+  private xvSub: WatchResult | null = null;
+  private xvUp = false;
+  private xvLosses = 0;
+  private lastSource = '';
   private readonly seenApps = new Set<string>();
   /** Эпоха провайдера ICAM2Proxy: растёт при каждой его потере/перезапуске. */
   private epoch = 0;
   /** Эпоха, в которой получен свой cookie. */
   private cookieEpoch = -1;
+  /** Когда взят свой cookie (null — нет): срок готовности блока после attach. */
+  private attachedAt: number | null = null;
 
   constructor(
     private readonly api: CamApi,
@@ -187,8 +237,30 @@ export class CameraRequest {
     this.log.info(`camera request: ${s}`.slice(0, 240));
   }
 
+  /** Решающее состояние: живые XView3D и ICAM2 по arbitrate(). */
   get state(): CamState | null {
-    return this.xvState ?? this.icamState;
+    return this.arbitrated().state;
+  }
+  /** Откуда решающее состояние (журнал и лист диагностики). */
+  get stateSource(): StateSource | null {
+    return this.arbitrated().source;
+  }
+  private arbitrated(): { state: CamState | null; source: StateSource | null } {
+    this.syncXview();
+    return arbitrate(this.xvUp ? this.xvState : null, this.icamState);
+  }
+
+  /** XView3D перезапущен без события доступности (вырос счётчик потерь): его прежний снимок не действителен. */
+  private syncXview(): void {
+    const losses = this.xvSub?.losses;
+    if (losses !== undefined && losses !== this.xvLosses) {
+      this.xvLosses = losses;
+      this.xvLost('XView3D перезапущен');
+    }
+  }
+  private xvLost(why: string): void {
+    if (this.xvState) this.log?.info(`camera request: ${why}: состояние ${this.xvState.application}/${this.xvState.perspective} больше не действует`.slice(0, 240));
+    this.xvState = null;
   }
   get ownCookie(): number | null {
     return this.cookie;
@@ -229,6 +301,11 @@ export class CameraRequest {
             this.icamSub = r;
             this.icamUp = r.available;
             this.icamLosses = r.losses ?? 0;
+          } else {
+            this.xvSub = r;
+            // уведомление уже пришло — провайдер жив (watch не доставляет уведомлений, пока он известно недоступен)
+            this.xvUp = this.xvUp || r.available;
+            this.xvLosses = r.losses ?? 0;
           }
           if (r.error) this.note(`${iface}: ${r.error}`);
           this.step();
@@ -252,7 +329,27 @@ export class CameraRequest {
         this.step();
       },
     );
-    void watchOne(XVIEW, 'CurrentState', (s) => (this.xvState = s));
+    void watchOne(
+      XVIEW,
+      'CurrentState',
+      (s) => {
+        this.syncXview();
+        this.xvState = s;
+        // доставленное уведомление — живой провайдер (недоступному watch уведомлений не доставляет)
+        this.xvUp = true;
+        if (s && !this.seenApps.has(`xv:${s.application}`) && this.seenApps.size < 16) {
+          this.seenApps.add(`xv:${s.application}`);
+          this.log?.info(`camera request: XView3D application seen: ${s.application} mode ${s.mode} perspective ${s.perspective}`.slice(0, 240));
+        }
+      },
+      (a) => {
+        // пропал — его снимок (в том числе штатный обзор) больше не действует; вернулся — ждём свежего уведомления
+        if (!a) this.xvLost('XView3D пропал');
+        if (this.xvSub && this.xvSub.losses !== undefined) this.xvLosses = this.xvSub.losses;
+        this.xvUp = a;
+        this.step();
+      },
+    );
     if (!this.timer) this.tick();
   }
 
@@ -264,6 +361,8 @@ export class CameraRequest {
     this.icamState = this.xvState = null;
     this.icamSub = null;
     this.icamUp = false;
+    this.xvSub = null;
+    this.xvUp = false;
     if (this.timer) {
       this.timer();
       this.timer = null;
@@ -278,6 +377,7 @@ export class CameraRequest {
     if (this.cookie !== null) this.note(`${why}: cookie ${this.cookie} забыт (на новом провайдере не наш), без detach`);
     this.cookie = null;
     this.cookieEpoch = -1;
+    this.attachedAt = null;
     this.ownView = 0;
     this.verifyUntil = 0;
     this.px = null;
@@ -317,6 +417,13 @@ export class CameraRequest {
   }
 
   step(): void {
+    // откуда решающее состояние — в журнал при каждой смене (и во время незавершённого вызова)
+    const a = this.arbitrated();
+    const src = a.state ? `${a.source}: ${a.state.application}/${a.state.perspective}` : '';
+    if (src !== this.lastSource) {
+      this.lastSource = src;
+      if (src) this.log?.info(`camera request: состояние камер по ${src}`.slice(0, 240));
+    }
     if (this.busy) {
       this.dirty = true;
       return;
@@ -337,6 +444,7 @@ export class CameraRequest {
     const d = this.decideNow();
     this.note(d.why);
     if (d.act === 'request') void this.request(d.view);
+    else if (d.act === 'attach') void this.request(0);
     else if (d.act === 'release') void this.release(d.why);
   }
 
@@ -352,6 +460,7 @@ export class CameraRequest {
       verifying: this.verifyUntil > 0,
       requestEnabled: this.policy.requestEnabled,
       busyApps: this.policy.busyApps,
+      attachWaitOver: this.cookie !== null && this.ownView === 0 && this.attachedAt !== null && this.now() - this.attachedAt > ATTACH_READY_MS,
     });
   }
 
@@ -416,13 +525,16 @@ export class CameraRequest {
         if (c === null) throw new Error('clientAttach: no cookie');
         this.cookie = c;
         this.cookieEpoch = ep;
+        this.attachedAt = this.now();
         this.note(`attach: cookie ${c}`);
       }
       // уход со страницы во время attach: сразу отпустить
       if (!this.wanted) return void (await this.releaseNow('страница закрыта во время запроса'));
-      // состояние могло смениться за время attach (штатный обзор, чужой вид): решить заново, не просить вслепую
+      // состояние могло смениться за время attach (штатный обзор, чужой вид, блок ещё запускается): решить заново,
+      // не просить вслепую; вид — из нового решения (attach без вида — когда блок не был готов)
       const again = this.decideNow();
-      if (again.act !== 'request') return;
+      if (again.act !== 'request') return void this.note(again.why);
+      view = again.view;
       const p = await this.proxy(ep);
       const cookie = this.cookie;
       const st = (application: unknown, mode: unknown) => ({ cookie, desiredState: { application, mode, perspective: view } });
@@ -460,6 +572,7 @@ export class CameraRequest {
     if (c === null) return;
     this.cookie = null;
     this.cookieEpoch = -1;
+    this.attachedAt = null;
     this.ownView = 0;
     this.verifyUntil = 0;
     // cookie другой эпохи провайдера — не наш на текущем: не отпускаем (providerLost уже забыл бы его)

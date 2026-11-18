@@ -156,13 +156,11 @@ describe('отрисовка: строгая поверхность (тольк�
     }
   });
 
-  it('кнопки HMI (запасной путь): только листание по кругу', async () => {
+  it('кнопок панели HMI нет: приложение не подписывается ни на одну (листание — вкладками kit)', async () => {
     const { ctx, app } = launch();
-    assert.deepEqual(Object.keys(ctx.clicks).sort(), ['BTN_PAGE', 'BTN_PREV']);
-    ctx.clicks.BTN_PREV({});
+    assert.deepEqual(Object.keys(ctx.clicks), []);
+    ctx.tab!(PAGE_COUNT - 1);
     assert.equal(app.page(), PAGE_COUNT - 1);
-    ctx.clicks.BTN_PAGE({});
-    assert.equal(app.page(), 0);
     app.dispose();
   });
 
@@ -177,14 +175,11 @@ describe('отрисовка: строгая поверхность (тольк�
     assert.equal((kit as ReturnType<typeof fakeKit>).buttons.length, 0);
   });
 
-  it('own = true, обычный запуск: на страницах только «Сброс» сессии на «Рельефе»; диагностики нет', async () => {
+  it('own = true, обычный запуск: на страницах нет кнопок (нижней полосы «Рельефа» с «Сбросом» больше нет); диагностики нет', async () => {
     const { ctx, app, kit } = launch({}, { own: true });
     const k = kit as ReturnType<typeof fakeKit>;
     await drawAll(ctx, app);
-    assert.deepEqual(Object.keys(k.presses).sort(), ['session-reset']);
-    const before = app.model.getState().epoch;
-    k.presses['session-reset']();
-    assert.equal(app.model.getState().epoch, before + 1, 'новая сессия касанием');
+    assert.deepEqual(Object.keys(k.presses).sort(), []);
     assert.equal(app.openDiagnostics(), false);
     assert.equal(ctx.sheets.length, 0);
   });
@@ -264,10 +259,28 @@ describe('отрисовка: настоящий Recorder и программн�
           app.model.setPaused(paused);
           await ctx.loopFn!();
           const rec = ctx.shown[ctx.shown.length - 1].cv as unknown as { targets: { y: number; key: string }[] };
-          assert.deepEqual(rec.targets.map((t) => t.key), page === 0 ? ['session-reset'] : [], `${sc}/${page}`);
+          assert.deepEqual(rec.targets.map((t) => t.key), [], `${sc}/${page}`);
         }
       }
       app.dispose();
     }
+  });
+});
+
+describe('страницы без руля, без нижней полосы «Рельефа» и без служебных подписей', () => {
+  it('ни на одной странице нет угла руля, «Сессии» внизу «Рельефа», «Шкалы уровней», пояснения высоты угла', async () => {
+    const { ctx, app } = launch({}, {});
+    const texts: string[] = [];
+    for (let page = 0; page < PAGE_COUNT; page++) {
+      ctx.tab!(page);
+      await ctx.loopFn!();
+      const cv = ctx.shown[ctx.shown.length - 1].cv as ReturnType<typeof strictSurface>;
+      for (const x of cv.texts) texts.push(x.s);
+    }
+    app.dispose();
+    assert.ok(texts.length > 50, `тексты страниц собраны (${texts.length})`);
+    assert.ok(texts.indexOf(T.terrain.altitude) >= 0 && texts.indexOf(T.terrain.speed) >= 0, 'проверка не пустая');
+    for (const gone of [T.terrain.steering, T.terrain.steeringHint, T.terrain.sessionTitle, T.suspension.levelScale, T.suspension.unitNote])
+      assert.ok(texts.indexOf(gone) < 0, `«${gone}» не рисуется`);
   });
 });

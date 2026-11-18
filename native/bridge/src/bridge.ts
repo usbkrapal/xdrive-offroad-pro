@@ -68,6 +68,37 @@ interface Running {
   request: number;
   /** Файл состояния mgu-camcluster создан при нашем запуске (его не было до нас). */
   showingOurs: boolean;
+  /** Где теряются кадры по последней статистике xop-camrx (stallLayer), '' — статистики ещё не было. */
+  layer?: string;
+}
+
+/**
+ * Слой, на котором нет кадров, по строке статистики xop-camrx ({"ev":"stats",…}, раз в 5 с): для причины «stalled»
+ * (журнал приложения и лист диагностики разработчика). Только грубый вывод без меняющихся счётчиков, чтобы причина не
+ * менялась каждые 5 с; полные строки статистики — в журнале моста. '' — строка не статистика.
+ */
+export function stallLayer(line: string): string {
+  if (line.length > 2048 || line.indexOf('"ev":"stats"') < 0) return '';
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return '';
+  }
+  const n = (k: string) => (typeof o[k] === 'number' && Number.isFinite(o[k] as number) ? (o[k] as number) : 0);
+  const shown = n('front') + n('left') + n('right');
+  const tag = typeof o.tag === 'string' && /^[0-9/]{1,20}$/.test(o.tag) ? o.tag : '';
+  const size = typeof o.size === 'string' && /^[0-9x]{1,12}$/.test(o.size) ? o.size : '';
+  const seen = tag && tag !== '0/0/0/0' ? `; метка ${tag}${size && size !== '0x0' ? `, кадр ${size}` : ''}` : '';
+  if (!n('active')) return 'приёмник AVB не запущен';
+  if (!n('packets')) return 'AVB: пакетов нет (поток камер не идёт или приёмник не подключён)';
+  if (!n('units')) return `AVB: пакеты есть, блоков H.264 нет (RTP не разобран${n('rtp_bad') ? `, ошибок RTP ${n('rtp_bad')}` : ''})`;
+  if (!n('frames') && n('decode_errors')) return `блоки H.264 есть, декодер с ошибками${seen}`;
+  if (!n('frames') && n('wait_idr')) return `блоки H.264 есть, ждём чистого IDR${seen}`;
+  if (!shown && n('unlabelled')) return `блоки H.264 есть, нет метки камеры (SEI)${seen}`;
+  if (!n('frames')) return `блоки H.264 есть, декодер кадров не выдаёт${seen}`;
+  if (!shown) return `кадры есть, но вид не разобран (размер/метка)${seen}`;
+  return '';
 }
 
 /**
@@ -276,6 +307,10 @@ export class Bridge {
         return;
       }
     }
+    if (r && r.child === child && stream === 'out') {
+      const layer = stallLayer(line);
+      if (layer || line.indexOf('"ev":"stats"') >= 0) r.layer = layer;
+    }
     const now = this.deps.now();
     if (now - this.lineBudget.at > 60000) this.lineBudget = { at: now, n: 0 };
     if (++this.lineBudget.n > CHILD_LINES_PER_MIN) return;
@@ -383,8 +418,9 @@ export class Bridge {
       if (!r.spec.viaCluster) this.pollFiles(r);
       const now = this.deps.now();
       if (this.lastFrameAt === null) {
-        if (now - this.startedAt > FIRST_FRAME_MS) this.set('stalled', 'нет кадров: нужного вида у блока камер нет (см. запрос вида) или поток не принимается');
-      } else if (now - this.lastFrameAt > STALL_MS) this.set('stalled', `кадры остановились ${Math.round((now - this.lastFrameAt) / 100) / 10} с назад`);
+        if (now - this.startedAt > FIRST_FRAME_MS)
+          this.set('stalled', `нет кадров: ${r.layer || 'статистики приёмника ещё нет (нужного вида у блока камер нет или поток не принимается)'}`.slice(0, 160));
+      } else if (now - this.lastFrameAt > STALL_MS) this.set('stalled', `кадры остановились${r.layer ? `: ${r.layer}` : ''}`.slice(0, 160));
       else if (this.state !== 'running') this.set('running', `${r.views.join(',')}`);
       else this.emit();
       this.armWatchdog();

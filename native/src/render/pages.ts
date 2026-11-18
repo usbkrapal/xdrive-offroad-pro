@@ -2,17 +2,17 @@
 // Все обязательные показатели остаются на своих экранах; недоступное — «—» и статус, не 0.
 
 import { cornerHeights, heightDeltas, maxSlipNow } from '../../../src/domain/derived';
-import { altitudeChangeFromStart, sessionElapsedMs, type Extremum } from '../../../src/domain/session';
+import { altitudeChangeFromStart, type Extremum } from '../../../src/domain/session';
 import { usableNumber, usableValue } from '../../../src/domain/signal';
 import { SUSPENSION_LEVELS, WHEELS, type Signal, type SignalMap, type Wheel } from '../../../src/domain/types';
 import { gearText } from '../../../src/components/displayHelpers';
 import { cameraAvailability, type CameraId } from '../../../src/screens/cameraPresentation';
 import type { ImageRegistry, CameraKey } from '../assets/registry';
 import { DIAL_K } from '../assets/spec';
-import { formatDuration, formatNumber, NONE, presentSource, shownNumber, shownSignal, type Shown } from '../format';
+import { formatNumber, NONE, presentSource, shownNumber, shownSignal, type Shown } from '../format';
 import { asDomain, type NativeState } from '../model/model';
 import type { ExtraSignal } from '../vehicle/adapter';
-import { FES_MODES } from '../vehicle/uds/records';
+import { EHC_LEVELS, FES_MODES } from '../vehicle/uds/records';
 import type { Layer, Surface } from '../platform/kitTypes';
 import { T } from '../strings';
 import { BEZEL, drawDialLive, drawDialStatic, FACE, vehicleRotation, type DialKind, type DialTexture } from './dial';
@@ -56,6 +56,21 @@ const shownCode = (e: ExtraSignal, table: Readonly<Record<number, string>>): Sho
   e.quality === 'valid' && e.value !== null && table[e.value] !== undefined ? { text: table[e.value], quality: 'valid', ok: true } : { text: '—', quality: e.quality === 'valid' ? 'invalid' : e.quality, ok: false };
 const usableExtra = (e: ExtraSignal): number | null => (e.quality === 'valid' && e.value !== null && Number.isFinite(e.value) ? e.value : null);
 
+/** Только документированные три уровня EHC; шесть сценарных уровней остаются в демо. */
+export function suspensionReading(state: NativeState): Shown {
+  return state.snapshot.scenarioId !== null
+    ? shownSignal(state.snapshot.signals['suspension.level'], (v) => t.suspensionLevel[v])
+    : shownCode(state.snapshot.extra.ehcLevel, EHC_LEVELS);
+}
+function suspensionChoices(state: NativeState): { label: string; on: boolean }[] {
+  if (state.snapshot.scenarioId !== null) {
+    const current = usableValue(state.snapshot.signals['suspension.level']);
+    return SUSPENSION_LEVELS.map((l) => ({ label: t.suspensionLevel[l], on: l === current }));
+  }
+  const current = usableExtra(state.snapshot.extra.ehcLevel);
+  return [16, 8, 2].map((n) => ({ label: EHC_LEVELS[n], on: n === current }));
+}
+
 const extremum = (e: Extremum | null, d: number, signed = false): Shown => (e === null ? NONE : { text: formatNumber(e.value, d, signed), quality: 'valid', ok: true });
 
 /* ============================== Рельеф ============================== */
@@ -93,35 +108,8 @@ function dialPanel(env: PageEnv, kind: DialKind, x: number, y: number, w: number
   }
 }
 
-/**
- * Последний пригодный угол руля: без свежего пригодного значения (устарело, одиночный недопустимый отсчёт) значок
- * остаётся в последнем положении приглушённым, а не прыгает в 0° (это выглядело бы как рывок руля к центру).
- */
-let lastSteerDeg: number | null = null;
-function steeringWheel(cv: Surface, cx: number, cy: number, value: number | null): void {
-  const r = 30;
-  if (value !== null) lastSteerDeg = value;
-  const shown = value ?? lastSteerDeg;
-  const rot = ((shown === null ? 0 : -shown) * Math.PI) / 180;
-  const ok = value !== null;
-  const col = ok ? '#c9d3e1' : withA('#8a95a6', 0.4);
-  cv.arc(cx, cy, r - 2.5, r + 2.5, 0, 360, col);
-  cv.circle(cx, cy, 8, '#2a313c');
-  cv.arc(cx, cy, 7, 9, 0, 360, col);
-  const R = (x: number, y: number): [number, number] => [cx + x * Math.cos(rot) - y * Math.sin(rot), cy + x * Math.sin(rot) + y * Math.cos(rot)];
-  for (const [a, b] of [[[-8, 1.5], [-29, 6]], [[8, 1.5], [29, 6]], [[0, 8], [0, 29]]] as const) {
-    const p = R(a[0], a[1]);
-    const q = R(b[0], b[1]);
-    cv.line(p[0], p[1], q[0], q[1], 4, col);
-  }
-  if (ok) {
-    const m = R(0, -r);
-    cv.circle(m[0], m[1], 4, C.red);
-  }
-}
-
-function levelNotches(cv: Surface, x: number, y: number, current: string | null): void {
-  SUSPENSION_LEVELS.forEach((l, i) => cv.fillRect(x + i * 30, y, 26, 4, l === current ? C.ice : C.track));
+function levelNotches(cv: Surface, x: number, y: number, state: NativeState): void {
+  suspensionChoices(state).forEach((l, i) => cv.fillRect(x + i * 30, y, 26, 4, l.on ? C.ice : C.track));
 }
 
 export function terrainPage(env: PageEnv): void {
@@ -135,9 +123,9 @@ export function terrainPage(env: PageEnv): void {
   env.images.image('xray'); // загрузка растра до cv.image(IMAGE_ID.xray) в drawDrivetrain
   drawDrivetrain(cv, s, env.phases, { x: L.stage.x, y: L.stage.y, w: L.stage.w, h: XRAY_H_TERRAIN, full: true });
 
-  // Правая колонка: высота, руль, уровень подвески.
+  // Правая колонка: высота и уровень подвески (руля и нижней полосы нет — по просьбе владельца).
   const sx = L.side.x;
-  const ph = (L.stage.h - 2 * GAP) / 3;
+  const ph = (L.stage.h - GAP) / 2;
   const altChange = altitudeChangeFromStart(state.session, asDomain(state.snapshot));
   panel(cv, sx, Y0, L.side.w, ph);
   readout(cv, sx + 16, Y0 + 12, {
@@ -150,54 +138,8 @@ export function terrainPage(env: PageEnv): void {
   });
   const y2 = Y0 + ph + GAP;
   panel(cv, sx, y2, L.side.w, ph);
-  steeringWheel(cv, sx + 52, y2 + ph / 2, usableNumber(s.steeringWheelAngleDeg));
-  readout(cv, sx + 104, y2 + 12, { label: t.terrain.steering, shown: shownNumber(s.steeringWheelAngleDeg, 0, true), unit: deg, size: 'lg', hint: t.terrain.steeringHint });
-  const y3 = y2 + ph + GAP;
-  panel(cv, sx, y3, L.side.w, ph);
-  readout(cv, sx + 16, y3 + 12, { label: t.terrain.suspensionLevel, shown: shownSignal(s['suspension.level'], (v) => t.suspensionLevel[v]), size: 'md' });
-  levelNotches(cv, sx + 16, y3 + ph - 18, usableValue(s['suspension.level']));
-
-  // Нижняя полоса: движение и сессия.
-  const by = L.strip.y;
-  const bh = L.strip.h;
-  const bx = L.stage.x;
-  const dw = 420;
-  panel(cv, bx, by, dw, bh);
-  readout(cv, bx + 16, by + 8, { label: t.terrain.speed, shown: shownNumber(s.vehicleSpeedKmh, 1), unit: t.units.km_h, size: 'md' });
-  readout(cv, bx + 168, by + 8, { label: t.terrain.gear, shown: shownSignal(s.gear, gearText), size: 'md' });
-  const hdcActive = usableValue(s['hdc.status']) === 'active';
-  const setSpeed = shownNumber(s['hdc.setSpeedKmh'], 0);
-  readout(cv, bx + 262, by + 8, {
-    label: t.terrain.hdc,
-    shown: shownSignal(s['hdc.status'], (v) => t.hdc[v]),
-    size: 'sm',
-    valueColor: hdcActive ? C.cold : undefined,
-    hint: setSpeed.ok ? `${t.terrain.hdcSet} ${setSpeed.text} ${t.units.km_h}` : hdcActive || setSpeed.quality !== 'unavailable' ? `${t.terrain.hdcSet} — ${t.quality[setSpeed.quality]}` : undefined,
-  });
-  const sx2 = bx + dw + GAP;
-  const sw = W - M - sx2;
-  panel(cv, sx2, by, sw, bh);
-  caps(cv, t.terrain.sessionTitle, sx2 + 16, by + 24, 12, C.dim);
-  // Сброс сессии — касанием (где kit ведёт экран); над строкой показателей, справа
-  if (env.button) env.button(sx2 + sw - 16 - 112, by + 6, 112, 26, t.native.buttons.newSession, env.newSession, 'session-reset');
-  const ses = state.session;
-  const alt = ses.minAltitude && ses.maxAltitude ? { text: `${formatNumber(ses.minAltitude.value, 0)} / ${formatNumber(ses.maxAltitude.value, 0)}`, quality: 'valid' as const, ok: true } : NONE;
-  const slip = ses.maxSlipOverall;
-  const items: [string, Shown, string | undefined][] = [
-    [t.session.elapsed, { text: formatDuration(sessionElapsedMs(ses, state.snapshot.simTimeMs)), quality: 'valid', ok: true }, undefined],
-    [t.session.maxAbsPitch, extremum(ses.maxAbsPitch, 1), deg],
-    [t.session.maxAbsRoll, extremum(ses.maxAbsRoll, 1), deg],
-    [t.session.altitudeRange, alt, t.units.m],
-    [t.session.maxSlip, extremum(slip, 0), slip ? `${t.units.percent} ${t.wheels[slip.wheel].short}` : t.units.percent],
-  ];
-  // Ширины колонок по содержимому: «мин / макс» — самое длинное значение.
-  const weights = [0.8, 0.95, 0.95, 1.55, 1.05];
-  const unitW = (sw - 32) / weights.reduce((a, b) => a + b, 0);
-  let cx = sx2 + 16;
-  items.forEach(([label, shown, unit], i) => {
-    readout(cv, cx, by + 32, { label, shown, unit, size: 'sm' });
-    cx += weights[i] * unitW;
-  });
+  readout(cv, sx + 16, y2 + 12, { label: t.terrain.suspensionLevel, shown: suspensionReading(state), size: 'md' });
+  levelNotches(cv, sx + 16, y2 + ph - 18, state);
 }
 
 /* ============================== Сцепление ============================== */
@@ -298,8 +240,7 @@ export function tractionPage(env: PageEnv): void {
   const ky = Y0 + dh + GAP;
   panel(cv, x3, ky, w3, h - dh - GAP, { title: t.traction.keyMetrics });
   const half = (w3 - 32) / 2;
-  readout(cv, x3 + 16, ky + 42, { label: t.terrain.steering, shown: shownNumber(s.steeringWheelAngleDeg, 0, true), unit: deg, size: 'md' });
-  readout(cv, x3 + 16 + half, ky + 42, { label: t.terrain.speed, shown: shownNumber(s.vehicleSpeedKmh, 1), unit: t.units.km_h, size: 'md' });
+  readout(cv, x3 + 16, ky + 42, { label: t.terrain.speed, shown: shownNumber(s.vehicleSpeedKmh, 1), unit: t.units.km_h, size: 'md' });
   const ses = state.session;
   const nowMax = maxSlipNow(asDomain(state.snapshot));
   readout(cv, x3 + 16, ky + 112, {
@@ -414,16 +355,14 @@ export function suspensionPage(env: PageEnv): void {
   const h = Y1 - Y0;
   const lw = 280;
   panel(cv, M, Y0, lw, h, { title: t.suspension.level });
-  const current = usableValue(s['suspension.level']);
-  readout(cv, M + 16, Y0 + 44, { label: t.suspension.level, shown: shownSignal(s['suspension.level'], (v) => t.suspensionLevel[v]), size: 'md' });
-  text(cv, t.suspension.levelScale, M + 16, Y0 + 128, 14, C.dim);
-  SUSPENSION_LEVELS.forEach((l, i) => {
-    const ly = Y0 + 140 + i * 36;
-    const on = l === current;
+  readout(cv, M + 16, Y0 + 44, { label: t.suspension.level, shown: suspensionReading(state), size: 'md' });
+  suspensionChoices(state).forEach((l, i) => {
+    const ly = Y0 + 116 + i * 36;
+    const on = l.on;
     if (on) cv.fillRect(M + 12, ly, lw - 32, 32, withA(C.ice, 0.08));
     cv.fillRect(M + 12, ly, 2, 32, on ? C.ice : C.track);
     cv.fillRect(M + 24, ly + 13, 7, 7, on ? C.ice : C.tick);
-    text(cv, t.suspensionLevel[l], M + 40, ly + 22, 17, on ? C.text : C.dim);
+    text(cv, l.label, M + 40, ly + 22, 17, on ? C.text : C.dim);
   });
 
   const cw = 312;
@@ -439,7 +378,6 @@ export function suspensionPage(env: PageEnv): void {
   const ccx = cx0 + cWidth / 2;
   frontMark(cv, ccx, Y0 + 2);
   topdown(env, 'topdownLarge', ccx, Y0 + 28, TOPDOWN_H_SUSPENSION, { labels: true, springs: s });
-  text(cv, t.suspension.unitNote, ccx, Y1 - 4, 12, C.dim, { align: 'center' });
 
   const x3 = xr + cw + GAP;
   const w3 = W - M - x3;

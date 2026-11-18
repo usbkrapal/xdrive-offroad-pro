@@ -4,7 +4,7 @@
 // ни одного запроса. stop() — цикл завершается, транспорт закрывается, поздние ответы ничего не меняют.
 
 import type { ReadResult } from './tasu';
-import { ECUS, recordsFor, UNVERIFIED_PERIOD_MS, type EcuKey, type EcuSpec, type RecordSpec, type Target } from './ecus';
+import { DIAGNOSTIC_PERIOD_MS, ECUS, recordsFor, UNVERIFIED_PERIOD_MS, type EcuKey, type EcuSpec, type RecordSpec, type Target } from './ecus';
 import { decodeExact, hexBytes, identityHex, IDENT_DID, type DecodedRecord } from './records';
 
 export interface ReadPort {
@@ -35,16 +35,40 @@ export interface UdsLog {
 const LOG_MAX = 240;
 
 export const GAP_MS = 150;
-const IDENT_BACKOFF_MS = [0, 5000, 10000, 20000, 40000, 60000];
+// не отвечающий блок (не установлен / спит): после первых попыток — раз в 5 мин, каждая попытка держит шину до тайм-аута
+const IDENT_BACKOFF_MS = [0, 5000, 10000, 20000, 40000, 60000, 120000, 300000];
 /** Запись, которую блок отвергает (NRC), — реже: не забивать шину отказами. */
 const REFUSED_PERIOD_MS = 30000;
 /** Причина «нет данных» живёт столько, сколько её обновляют (идентификация повторяется). */
 const ABSENT_STALE_MS = 120000;
+/**
+ * Шина диагностики — строго один запрос за раз (запрос + ответ + GAP_MS). Если показываемые записи вместе просят
+ * больше BUS_TARGET времени шины, самые частые из них замедляются до общего наименьшего периода P* («заполнение»:
+ * Σ стоимость / max(период, P*) ≤ бюджет), редкие остаются как есть. Срок свежести выхода — по фактическому периоду
+ * (3 периода + запас на один чужой тайм-аут), но не выше MAX_STALE_MS: старше — действительно «устарело».
+ */
+export const BUS_TARGET = 0.75;
+export const MAX_STALE_MS = 10000;
+/**
+ * Запас срока свежести на один чужой тайм-аут перед очередным чтением (шина последовательна: молчащий блок держит её
+ * до ответа-тайм-аута 1,5 с + пауза). Без него значение «устаревало» бы из-за чужого блока при исправном своём.
+ */
+export const TIMEOUT_ALLOWANCE_MS = 2000;
+/** Нет ответа на запись: повтор не раньше, чем через 2 с × 2^(подряд−1), не реже раза в 30 с. */
+const TIMEOUT_BACKOFF_MS = 2000;
+const TIMEOUT_MAX_MS = 30000;
+/** Начальная оценка длительности одного запроса, мс (затем — скользящее среднее измеренных). */
+const COST_START_MS = 300;
 
 export type IdentState = 'pending' | 'accepted' | 'unverified' | 'failed';
 
 interface RecState {
   nextAt: number;
+  /** Нет ответа подряд (сброс при ответе). */
+  timeouts: number;
+  /** Измеренный промежуток между двумя последними ответами и наибольший за работу, мс. */
+  intervalMs: number | null;
+  maxIntervalMs: number;
   ok: number;
   failed: number;
   lastAt: number | null;
@@ -71,6 +95,11 @@ export interface RecordDiagnostics {
   readonly lastAt: number | null;
   readonly lastRaw: string | null;
   readonly lastError: string | null;
+  /** Текущий период чтения с бюджетом шины, мс. */
+  readonly periodMs: number;
+  /** Измеренный промежуток между ответами: последний и наибольший, мс. */
+  readonly intervalMs: number | null;
+  readonly maxIntervalMs: number;
   /** Разбор по каталогу (у неопознанного блока — только кандидат, в сигналы не идёт). */
   readonly values: Readonly<Record<string, number | null>> | null;
 }
@@ -97,6 +126,10 @@ export class UdsReader {
   private running = false;
   private visible = false;
   private loop: Promise<void> | null = null;
+  /** Скользящее среднее длительности запроса вместе с паузой, мс. */
+  private costMs = COST_START_MS;
+  /** Наименьший период показываемых записей по бюджету шины, мс (0 — бюджет не ограничивает). */
+  private floorMs = 0;
 
   constructor(
     private readonly port: ReadPort,
@@ -142,20 +175,86 @@ export class UdsReader {
   async step(): Promise<boolean> {
     const job = this.next(this.now());
     if (!job) return false;
+    const started = this.now();
     const r = await this.port.read(job.ecu.spec.addr, job.rec ? job.rec.schema.did : IDENT_DID);
+    // измеренная стоимость ОТВЕЧЕННОГО запроса (с паузой) — для бюджета шины; тайм-ауты учитываются отсрочкой, не здесь
+    if (r.kind === 'ok' || r.kind === 'nrc') this.costMs = this.costMs * 0.8 + (Math.max(0, this.now() - started) + GAP_MS) * 0.2;
     if (!this.running && r.kind === 'closed') return true;
     if (job.rec) this.onRecord(job.ecu, job.rec, r);
     else this.onIdent(job.ecu, r);
     return true;
   }
 
+  /** Базовый период записи без бюджета: неопознанный блок / только диагностика / свой. */
+  private basePeriod(e: EcuState, rec: RecordSpec): number {
+    if (e.ident !== 'accepted') return UNVERIFIED_PERIOD_MS;
+    return rec.diagnosticOnly ? Math.max(rec.periodMs, DIAGNOSTIC_PERIOD_MS) : rec.periodMs;
+  }
+
+  /** Период с бюджетом шины: показываемые записи опознанных блоков — не чаще P* (floorMs). */
+  periodOf(e: EcuState, rec: RecordSpec): number {
+    const base = this.basePeriod(e, rec);
+    return e.ident === 'accepted' && !rec.diagnosticOnly ? Math.max(base, this.floorMs) : base;
+  }
+
+  /** Доля шины, которую просят периодические записи при текущей стоимости запроса; отсюда множитель периодов. */
+  private budget(): void {
+    let fixed = 0;
+    let shown = 0;
+    for (const e of this.ecus) {
+      if (e.ident === 'pending' || e.ident === 'failed') continue;
+      for (const rec of recordsFor(e.spec, e.identity)) {
+        const st = e.recs.get(rec.schema.did);
+        if (st && st.timeouts > 0) continue; // молчащая запись — на отсрочке, шину почти не занимает
+        const share = this.costMs / this.basePeriod(e, rec);
+        if (e.ident === 'accepted' && !rec.diagnosticOnly) shown += share;
+        else fixed += share;
+      }
+    }
+    const room = Math.max(0.05, BUS_TARGET - fixed);
+    if (shown <= room) {
+      this.floorMs = 0;
+      return;
+    }
+    // наименьший общий период P*: Σ cost / max(base, P*) ≤ room (монотонно — двоичный поиск)
+    const bases: number[] = [];
+    for (const e of this.ecus)
+      if (e.ident === 'accepted')
+        for (const rec of recordsFor(e.spec, e.identity)) {
+          const st = e.recs.get(rec.schema.did);
+          if (!rec.diagnosticOnly && !(st && st.timeouts > 0)) bases.push(rec.periodMs);
+        }
+    let lo = 0;
+    let hi = 120000;
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      const load = bases.reduce((a, b) => a + this.costMs / Math.max(b, mid), 0);
+      if (load > room) lo = mid;
+      else hi = mid;
+    }
+    this.floorMs = hi;
+  }
+
+  /** Срок свежести выхода записи: как в схеме, растянутый вместе с периодом, но не больше MAX_STALE_MS. */
+  private staleOf(rec: RecordSpec): number {
+    const period = rec.diagnosticOnly ? rec.periodMs : Math.max(rec.periodMs, this.floorMs);
+    return Math.max(rec.staleMs, Math.min(3 * period + TIMEOUT_ALLOWANCE_MS, MAX_STALE_MS));
+  }
+
   /** Наступившая идентификация — раньше любой записи (сначала понять, какой это блок); затем самая просроченная запись. */
   private next(t: number): { ecu: EcuState; rec: RecordSpec | null } | null {
+    this.budget();
     let best: { ecu: EcuState; rec: RecordSpec | null; due: number } | null = null;
+    // первая идентификация — раньше всего (сначала понять, какой это блок)
     for (const e of this.ecus) {
-      if ((e.ident === 'pending' || e.ident === 'failed') && e.nextIdentAt <= t && (!best || best.rec || e.nextIdentAt < best.due)) best = { ecu: e, rec: null, due: e.nextIdentAt };
+      if (e.ident === 'pending' && e.nextIdentAt <= t && (!best || e.nextIdentAt < best.due)) best = { ecu: e, rec: null, due: e.nextIdentAt };
     }
     if (best) return best;
+    // повтор неудавшейся идентификации — наравне с записями по сроку (не вперёд всех: молчащий блок держит шину до
+    // тайм-аута, а показываемые записи уже идут)
+    for (const e of this.ecus) {
+      if (e.ident === 'failed' && e.nextIdentAt <= t && (!best || e.nextIdentAt < best.due)) best = { ecu: e, rec: null, due: e.nextIdentAt };
+    }
     for (const e of this.ecus) {
       if (e.ident === 'pending' || e.ident === 'failed') continue;
       for (const rec of recordsFor(e.spec, e.identity)) {
@@ -169,7 +268,7 @@ export class UdsReader {
   private rec(e: EcuState, rec: RecordSpec): RecState {
     let st = e.recs.get(rec.schema.did);
     if (!st) {
-      st = { nextAt: 0, ok: 0, failed: 0, lastAt: null, lastRaw: null, lastError: null, last: null };
+      st = { nextAt: 0, timeouts: 0, intervalMs: null, maxIntervalMs: 0, ok: 0, failed: 0, lastAt: null, lastRaw: null, lastError: null, last: null };
       e.recs.set(rec.schema.did, st);
     }
     return st;
@@ -226,8 +325,14 @@ export class UdsReader {
     const t = this.now();
     const st = this.rec(e, rec);
     const accepted = e.ident === 'accepted';
-    const period = accepted ? rec.periodMs : UNVERIFIED_PERIOD_MS;
+    const period = this.periodOf(e, rec);
+    const staleMs = this.staleOf(rec);
     st.nextAt = t + period;
+    if (r.kind === 'timeout') {
+      // молчащая запись не должна занимать шину каждый период (каждый тайм-аут — до 1,5…4 с)
+      st.timeouts++;
+      st.nextAt = t + Math.max(period, Math.min(TIMEOUT_MAX_MS, TIMEOUT_BACKOFF_MS * 2 ** (st.timeouts - 1)));
+    } else st.timeouts = 0;
     if (r.kind !== 'ok') {
       st.failed++;
       st.lastError = resultText(r);
@@ -246,10 +351,14 @@ export class UdsReader {
       st.lastError = d.error;
       st.last = null;
       this.noteRecord(e, rec, st, d.error, null);
-      if (accepted) for (const o of rec.outputs) this.sink({ target: o.target, value: null, absent: false, reason: `${did4(rec.schema.did)}: ${d.error}`, at: t, staleMs: rec.staleMs, field: this.field(e, rec) });
+      if (accepted) for (const o of rec.outputs) this.sink({ target: o.target, value: null, absent: false, reason: `${did4(rec.schema.did)}: ${d.error}`, at: t, staleMs, field: this.field(e, rec) });
       return;
     }
     st.ok++;
+    if (st.lastAt !== null) {
+      st.intervalMs = t - st.lastAt;
+      st.maxIntervalMs = Math.max(st.maxIntervalMs, st.intervalMs);
+    }
     st.lastAt = t;
     st.lastError = null;
     st.last = d.rec;
@@ -258,14 +367,21 @@ export class UdsReader {
     const others = (did: number) => {
       const o = e.recs.get(did);
       const spec = recordsFor(e.spec, e.identity).find((x) => x.schema.did === did);
-      return o && o.last && o.lastAt !== null && spec && t - o.lastAt <= spec.staleMs ? o.last : null;
+      return o && o.last && o.lastAt !== null && spec && t - o.lastAt <= this.staleOf(spec) ? o.last : null;
     };
     for (const o of rec.outputs) {
       const gate = rec.gate ? rec.gate(o.value, others) : null;
       const v = gate ? null : d.rec.values[o.value];
       const reason = gate ?? d.rec.reasons[o.value] ?? null;
-      this.sink({ target: o.target, value: v === undefined ? null : v, absent: false, reason, at: t, staleMs: rec.staleMs, field: this.field(e, rec) });
+      // «смысл не установлен» — нет данных (не ошибка); живёт столько же, сколько любая причина «нет данных»
+      const unknown = !gate && !!(d.rec.unknown && d.rec.unknown[o.value]);
+      this.sink({ target: o.target, value: v === undefined ? null : v, absent: unknown, reason, at: t, staleMs: unknown ? ABSENT_STALE_MS : staleMs, field: this.field(e, rec) });
     }
+  }
+
+  /** Бюджет шины: измеренная стоимость запроса и множитель периодов показываемых записей. */
+  bus(): { costMs: number; floorMs: number } {
+    return { costMs: Math.round(this.costMs), floorMs: Math.round(this.floorMs) };
   }
 
   diagnostics(): EcuDiagnostics[] {
@@ -296,6 +412,9 @@ export class UdsReader {
           lastAt: st ? st.lastAt : null,
           lastRaw: st ? st.lastRaw : null,
           lastError: st ? st.lastError : null,
+          periodMs: Math.round(this.periodOf(e, rec)),
+          intervalMs: st ? st.intervalMs : null,
+          maxIntervalMs: st ? st.maxIntervalMs : 0,
           values: st && st.last ? st.last.values : null,
         };
       }),

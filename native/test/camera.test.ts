@@ -3,11 +3,11 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { Bridge, HANDOVER_MS, PRODUCTION_PRODUCERS, socketAccess, type ChildLike, type Deps, type Peer, type SpawnHooks } from '../bridge/src/bridge';
+import { Bridge, HANDOVER_MS, PRODUCTION_PRODUCERS, socketAccess, stallLayer, type ChildLike, type Deps, type Peer, type SpawnHooks } from '../bridge/src/bridge';
 import { CAMRX, CAMRX_ROOT, CAMRX_SPEC } from '../bridge/src/camcluster';
 import { encodeLine, parseEvent } from '../src/camera/ctl';
 import { CameraFeeds, type FeedDeps } from '../src/camera/feeds';
-import { camPolicy, CameraRequest, cookieOf, decide, ICAM2, XVIEW, type CamApi, type CamPolicy } from '../src/camera/request';
+import { arbitrate, ATTACH_READY_MS, camPolicy, CameraRequest, cookieOf, decide, ICAM2, XVIEW, type CamApi, type CamPolicy } from '../src/camera/request';
 import type { WatchOpts, WatchResult } from '../src/platform/kitTypes';
 
 /* ---------------- ручные таймеры ---------------- */
@@ -82,6 +82,10 @@ function fakeIcam(deferProxy = false) {
       avail.get(ICAM2)!(true);
     },
     sub: () => subs.get(ICAM2)!,
+    xvAvailability: (a: boolean) => avail.get(XVIEW)!(a),
+    xvSub: () => subs.get(XVIEW)!,
+    /** Текущий обработчик XView3D (для проверки, что обработчик прежней подписки ничего не меняет). */
+    xvHandler: () => handlers.get(XVIEW)!,
     named: (m: string) => calls.filter((c) => c.method === m),
   };
 }
@@ -131,6 +135,143 @@ describe('камеры: запрос вида (ICAM2Proxy)', () => {
     assert.equal(decide({ ...base, state: st('X'), triesLeft: false }).act, 'none');
     assert.deepEqual(camPolicy({}), { requestEnabled: true, busyApps: [] });
     assert.deepEqual(camPolicy({ XOP_CAM_REQUEST: 'OFF', XOP_CAM_BUSY: 'A, 7,bad-name' }), { requestEnabled: false, busyApps: ['A', '7'] });
+  });
+
+  // Два источника состояния: XView3D (незаполненный на iDrive 7 до запуска блока) и ICAM2. Root воспроизвёл: XView3D
+  // SIGNAL_UNFILLED/255 закрывал допустимое ICAM2 IDLE/0 — только attach, вида нет.
+  it('состояние: незаполненный XView3D не закрывает допустимое ICAM2 (attach и вид 7); источник виден', async () => {
+    const { f, r, lines } = await requestRig();
+    f.xview('SIGNAL_UNFILLED', 255);
+    f.state('IDLE', 0);
+    await flush();
+    assert.deepEqual(r.state, { application: 'IDLE', mode: 'MODE_MOSAIK', perspective: 0 });
+    assert.equal(r.stateSource, 'ICAM2');
+    f.named('clientAttach')[0].resolve({ cookie: 21 });
+    await flush();
+    assert.equal(f.named('changeState').length, 1);
+    assert.equal((f.named('changeState')[0].params as { cookie: number }).cookie, 21);
+    assert.ok(lines.some((l) => /состояние камер по ICAM2: IDLE\/0/.test(l)));
+    assert.ok(lines.some((l) => /XView3D application seen: SIGNAL_UNFILLED/.test(l)));
+  });
+
+  it('состояние: штатный обзор у ЛЮБОГО живого источника главнее (свой cookie отпускается)', async () => {
+    const { f, r } = await requestRig();
+    f.xview('TOPREARVIEW', 1);
+    f.state('IDLE', 0);
+    await flush();
+    assert.equal(r.stateSource, 'XView3D');
+    assert.equal(f.named('clientAttach').length, 0, 'штатный обзор только у XView3D — не просим');
+    f.xview('SOMETHING', 0);
+    await flush();
+    f.named('clientAttach')[0].resolve({ cookie: 22 });
+    await flush();
+    f.named('changeState')[0].resolve(0);
+    await flush();
+    f.state('SIDEVIEW', 2);
+    await flush();
+    assert.equal(r.stateSource, 'ICAM2');
+    assert.deepEqual(f.named('clientDetach').map((c) => c.params), [{ cookie: 22 }], 'штатный обзор только у ICAM2 — тоже уступаем');
+    assert.deepEqual(arbitrate({ application: 'SIGNAL_UNFILLED', mode: '', perspective: 255 }, null).source, 'XView3D');
+    assert.equal(arbitrate({ application: 'DR_ACTIVE', mode: '', perspective: 7 }, { application: 'IDLE', mode: '', perspective: 0 }).source, 'XView3D');
+    assert.equal(arbitrate({ application: 'IDLE', mode: '', perspective: 0 }, { application: 'DR_ACTIVE', mode: '', perspective: 7 }).source, 'ICAM2', 'DR_ACTIVE главнее «свободно»');
+    assert.equal(arbitrate({ application: 'X', mode: '', perspective: 0 }, { application: 'Y', mode: '', perspective: 0 }).source, 'XView3D', 'равные — XView3D');
+    assert.deepEqual(arbitrate(null, null), { state: null, source: null });
+  });
+
+  it('состояние: XView3D пропал (событие или счётчик потерь) — его штатный обзор больше не действует; вернулся — только свежее уведомление', async () => {
+    const { f, r } = await requestRig();
+    f.xview('TOPREARVIEW', 1);
+    f.state('IDLE', 0);
+    await flush();
+    assert.equal(f.named('clientAttach').length, 0);
+    f.xvAvailability(false);
+    await flush();
+    assert.equal(r.stateSource, 'ICAM2');
+    assert.equal(f.named('clientAttach').length, 1, 'снимок пропавшего XView3D не держит камеры занятыми');
+    f.xvAvailability(true);
+    await flush();
+    assert.equal(r.stateSource, 'ICAM2', 'вернувшийся XView3D без нового уведомления — без состояния');
+    // перезапуск без события: вырос счётчик потерь
+    f.xview('TOPREARVIEW', 1);
+    await flush();
+    assert.equal(r.stateSource, 'XView3D');
+    f.xvSub().losses = (f.xvSub().losses ?? 0) + 1;
+    assert.equal(r.stateSource, 'ICAM2');
+  });
+
+  it('состояние: обработчик прежней подписки XView3D (после ухода и возврата на страницу) ничего не меняет', async () => {
+    const { f, r } = await requestRig();
+    const old = f.xvHandler();
+    r.setWanted(false);
+    r.setWanted(true);
+    await flush();
+    f.state('IDLE', 0);
+    old({ application: 'TOPREARVIEW', mode: '', perspective: 1 });
+    await flush();
+    assert.equal(r.stateSource, 'ICAM2');
+    assert.equal(f.named('clientAttach').length, 1, 'поздний обратный вызов прежнего поколения не стал штатным обзором');
+  });
+
+  // G07 0.1.2: все виды «Недоступно». iDrive 7 запускает блок камер только после attach (Drive Recorder: около 10 с
+  // SIGNAL_UNFILLED после attach). Прежнее решение ждало готовности до attach — без чужого клиента это навсегда.
+  it('блок не готов (SIGNAL_UNFILLED) без чужого клиента: attach сразу, вид — только когда блок готов, тем же cookie', async () => {
+    const { f, r } = await requestRig();
+    f.state('SIGNAL_UNFILLED', 255);
+    await flush();
+    assert.equal(f.named('clientAttach').length, 1, 'attach, чтобы блок запустился');
+    f.named('clientAttach')[0].resolve({ cookie: 11 });
+    await flush();
+    assert.equal(r.ownCookie, 11);
+    assert.equal(f.named('changeState').length, 0, 'пока не готов — вид не просим (блок отбрасывает запрошенное)');
+    assert.match(r.reason, /ждём готовности/);
+    f.state('SIGNAL_UNFILLED', 255);
+    await flush();
+    assert.equal(f.named('clientAttach').length, 1, 'второго attach нет');
+    f.state('DR_STANDBY', 0);
+    await flush();
+    assert.equal(f.named('changeState').length, 1);
+    assert.deepEqual(f.named('changeState')[0].params, { cookie: 11, desiredState: { application: 'DR_ACTIVE', mode: 'MODE_MOSAIK', perspective: 7 } });
+    assert.equal(f.named('clientDetach').length, 0);
+  });
+
+  it('блок не стал готов за ATTACH_READY_MS после своего attach — свой cookie отпускается; штатный обзор во время запуска — тоже', async () => {
+    const { c, f, r } = await requestRig();
+    f.state('SIGNAL_UNFILLED', 255);
+    await flush();
+    f.named('clientAttach')[0].resolve({ cookie: 12 });
+    await flush();
+    await c.advance(ATTACH_READY_MS + 1500);
+    assert.equal(f.named('clientDetach').length, 1);
+    assert.deepEqual(f.named('clientDetach')[0].params, { cookie: 12 });
+    f.named('clientDetach')[0].resolve(0);
+    await flush();
+    assert.equal(r.ownCookie, null);
+    assert.equal(f.named('changeState').length, 0);
+    const base = { wanted: true, available: true, need: NEED, ownView: 0, triesLeft: true, verifying: false };
+    const st = (application: string, perspective = 0) => ({ application, mode: '', perspective });
+    assert.equal(decide({ ...base, ownCookie: false, state: st('SIGNAL_UNFILLED', 255) }).act, 'attach');
+    assert.equal(decide({ ...base, ownCookie: false, state: st('SIGNAL_UNFILLED', 255), requestEnabled: false }).act, 'none');
+    assert.equal(decide({ ...base, ownCookie: false, state: st('SIGNAL_UNFILLED', 255), triesLeft: false }).act, 'none');
+    assert.equal(decide({ ...base, ownCookie: true, state: st('SIGNAL_UNFILLED', 255) }).act, 'none');
+    assert.equal(decide({ ...base, ownCookie: true, state: st('TOPREARVIEW', 255) }).act, 'release', 'штатный обзор главнее и при запуске');
+  });
+
+  it('DR_ACTIVE с видом 0 после своего запроса (не применён): просим снова тем же cookie, а не отпускаем как чужую смену вида', async () => {
+    const { c, f, r } = await requestRig();
+    f.state('DR_STANDBY');
+    await flush();
+    f.named('clientAttach')[0].resolve({ cookie: 13 });
+    await flush();
+    f.named('changeState')[0].resolve(0);
+    await flush();
+    f.state('DR_ACTIVE', 0);
+    await c.advance(7000);
+    assert.equal(f.named('clientDetach').length, 0, 'вид 0 — не чужой вид');
+    assert.equal(f.named('changeState').length, 2);
+    assert.equal((f.named('changeState')[1].params as { cookie: number }).cookie, 13);
+    assert.equal(r.ownCookie, 13);
+    const base = { wanted: true, available: true, need: NEED, ownView: 7, triesLeft: true, verifying: false };
+    assert.equal(decide({ ...base, ownCookie: false, state: { application: 'DR_ACTIVE', mode: '', perspective: 0 } }).act, 'none', 'чужой DR_ACTIVE/0 без своего cookie не трогаем');
   });
 
   it('выключатель разработчика: только слушаем, ни одного attach', async () => {
@@ -374,6 +515,34 @@ describe('мост камер: источник кадров', () => {
     assert.deepEqual(spawned[0].child.killed, ['SIGTERM']);
     spawned[0].hooks.onExit(null, 'SIGTERM');
     assert.equal(spawned.length, 2, 'после выхода прежнего — запуск');
+  });
+
+  it('нет кадров: причина «stalled» называет слой по статистике xop-camrx и не меняется от счётчиков', async () => {
+    const S = (o: Record<string, unknown>) => JSON.stringify({ ev: 'stats', active: 1, packets: 0, units: 0, frames: 0, front: 0, left: 0, right: 0, wait_idr: 0, unlabelled: 0, decode_errors: 0, rtp_bad: 0, tag: '0/0/0/0', size: '0x0', ...o });
+    assert.equal(stallLayer('not stats'), '');
+    assert.match(stallLayer(S({ active: 0 })), /приёмник AVB не запущен/);
+    assert.match(stallLayer(S({})), /пакетов нет/);
+    assert.match(stallLayer(S({ packets: 900, rtp_bad: 3 })), /блоков H\.264 нет.*ошибок RTP 3/);
+    assert.match(stallLayer(S({ packets: 900, units: 40, wait_idr: 40, tag: '1/51/50/9', size: '0x0' })), /ждём чистого IDR; метка 1\/51\/50\/9$/);
+    assert.match(stallLayer(S({ packets: 900, units: 40, frames: 0, decode_errors: 2 })), /декодер с ошибками/);
+    assert.match(stallLayer(S({ packets: 900, units: 40, frames: 30, unlabelled: 30 })), /нет метки камеры/);
+    assert.match(stallLayer(S({ packets: 900, units: 40, frames: 30, tag: '1/51/50/7', size: '1280x960' })), /вид не разобран.*метка 1\/51\/50\/7, кадр 1280x960/);
+    assert.equal(stallLayer(S({ packets: 900, units: 40, frames: 30, front: 15 })), '');
+    assert.equal(stallLayer(S({ packets: 100, wait_idr: 0 })), stallLayer(S({ packets: 9999, rtp_lost: 7 })), 'счётчики не меняют причину');
+
+    const { b, c, spawned, peer } = bridgeRig();
+    const p = peer();
+    b.connect(p);
+    b.data(p, encodeLine({ op: 'start' }));
+    spawned[0].hooks.onLine('out', S({ packets: 5000, units: 300, wait_idr: 300, tag: '1/51/50/9' }));
+    await c.advance(11000);
+    const last = parseEvent(p.got[p.got.length - 1].trim())!;
+    assert.equal(last.state, 'stalled');
+    assert.match(last.reason, /нет кадров: блоки H\.264 есть, ждём чистого IDR; метка 1\/51\/50\/9/);
+    const before = p.got.length;
+    spawned[0].hooks.onLine('out', S({ packets: 6000, units: 360, wait_idr: 360, tag: '1/51/50/9' }));
+    await c.advance(5000);
+    assert.ok(p.got.slice(before).every((l) => parseEvent(l.trim())!.reason === last.reason), 'та же причина при новых счётчиках');
   });
 
   it('новое соединение вытесняет прежнее; «start» в течение передачи — источник не перезапускается', async () => {

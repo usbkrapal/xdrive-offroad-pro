@@ -185,5 +185,9 @@ describe('журнал: состав поля (имена и типы члено
     for (let i = 0; i < 20; i++) many[`m${i}`] = 1.5;
     assert.match(memberShape(many), /m15:number, …\+4\}$/);
     assert.doesNotMatch(memberShape({ a: 60030 }), /60030/);
+    // идентификатор и местоположение — даже имена не показываются; обычные члены (lateral…) — как есть
+    const sh = memberShape({ vin: 'WBA', VIN: 'x', latitude: 55.1, longitude: 37.6, gpsFix: 1, statusLateralAcceleration: 2 });
+    assert.doesNotMatch(sh, /vin|latitude|longitude|gps/i);
+    assert.match(sh, /statusLateralAcceleration:int/);
   });
 });

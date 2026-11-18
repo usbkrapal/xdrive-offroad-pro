@@ -143,6 +143,11 @@ export class FakeRenderer {
     }
   }
 
+  /** Обрыв всех соединений (рендерер перезапустился); сервер продолжает принимать новые. */
+  drop(): void {
+    for (const s of this.conns) s.destroy();
+  }
+
   close(): Promise<void> {
     for (const s of this.conns) s.destroy();
     return new Promise((ok) => this.server.close(() => (rmSync(this.path, { force: true }), ok())));

@@ -30,8 +30,18 @@ function listen(path: string, mode: number, onConn: (s: net.Socket) => void, gid
   }
   const srv = net.createServer(onConn);
   srv.listen(path, () => {
-    if (gid !== null) fs.chownSync(path, 0, gid);
-    fs.chmodSync(path, mode);
+    // сбой chown/chmod не роняет службу (иначе цикл перезапусков): сокет остаётся только для root, ошибка в журнале
+    try {
+      if (gid !== null) fs.chownSync(path, 0, gid);
+      fs.chmodSync(path, mode);
+    } catch (e) {
+      console.log(`ERROR: ${path}: ${String(e)}: socket root-only (0600)`);
+      try {
+        fs.chmodSync(path, 0o600);
+      } catch {
+        /* не удалось и это */
+      }
+    }
   });
   return srv;
 }

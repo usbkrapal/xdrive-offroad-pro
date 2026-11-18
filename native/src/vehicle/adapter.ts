@@ -177,6 +177,8 @@ export interface VehicleDiagnostics {
   /** История: первый отсчёт каждого поля с начала чтения. */
   readonly firstSamples: readonly DiagEntry[];
   readonly changes: readonly DiagEntry[];
+  /** Состав каждого поля при первом отсчёте: «iface.поле» → имена и типы членов (memberShape, без значений). */
+  readonly memberShapes?: Readonly<Record<string, string>>;
 }
 
 const GEAR_STALE_MS = VEHICLE_FIELDS.reduce((m, f) => f.outputs.reduce((n, o) => (o.kind === 'gearbox' || o.kind === 'selection' ? Math.max(n, o.staleMs) : n), m), 0) || 60000;
@@ -242,6 +244,9 @@ function getterStats(r: Partial<GetterStats> | undefined): GetterStats | null {
   };
 }
 
+/** Члены с идентификатором автомобиля / местоположением: их имена в журнал и на лист не попадают. */
+const SENSITIVE_MEMBER = /(^|[^a-z])vin|^vin|vehicleidentification|fahrgestell|chassisnumber|latitude|longitude|gps|coordinat|geopos|geoloc|address/i;
+
 /** Имена и типы членов значения поля (до 16, имена ≤ 40 символов) — без самих значений. */
 export function memberShape(v: unknown): string {
   if (v === null || typeof v !== 'object') return typeof v;
@@ -250,7 +255,9 @@ export function memberShape(v: unknown): string {
   const parts = keys.slice(0, 16).map((k) => {
     const x = (v as Record<string, unknown>)[k];
     const t = x === null ? 'null' : Array.isArray(x) ? `array[${x.length}]` : typeof x === 'number' ? (Number.isInteger(x) ? 'int' : 'number') : typeof x;
-    return `${k.replace(/[^\w.]/g, '?').slice(0, 40)}:${t}`;
+    // имена членов с идентификатором автомобиля или местоположением не показываются (только тип)
+    const name = SENSITIVE_MEMBER.test(k) ? '[скрыто]' : k.replace(/[^\w.]/g, '?').slice(0, 40);
+    return `${name}:${t}`;
   });
   return `{${parts.join(', ')}${keys.length > 16 ? `, …+${keys.length - 16}` : ''}}`;
 }
@@ -264,6 +271,7 @@ export class VehicleAdapter {
   /** id → источник (поле) → последний отсчёт. */
   private samples = new Map<SignalId, Map<string, Sample>>();
   private extraSamples = new Map<ExtraId, Sample>();
+  private readonly shapes = new Map<string, string>();
   private gearbox: GearSample | null = null;
   private selection: GearSample | null = null;
   private tyres = new TyreState();
@@ -428,6 +436,7 @@ export class VehicleAdapter {
     this.rev++;
     const raw = this.diag.record(f.iface, f.field, f.diag, v, at, !!f.diagChanges);
     // Журнал приложения (обычный режим): первый отсчёт каждого поля с известными членами — один раз за подписку
+    if (st.samples === 1) this.shapes.set(`${shortIface(f.iface)}.${f.field}`, memberShape(v));
     if (st.samples === 1 && this.log) {
       this.log.info(clipLog(`signal ${shortIface(f.iface)}.${f.field}: first sample ${raw ? JSON.stringify(raw) : '(no known members)'}`));
       // состав поля (имена и типы членов, без значений): есть ли квалификатор/счётчик/CRC рядом со значением
@@ -698,6 +707,7 @@ export class VehicleAdapter {
       gearboxOil,
       latestSamples: this.diag.latestSamples(),
       firstSamples: this.diag.firstSamples(),
+      memberShapes: ((o: Record<string, string>) => (this.shapes.forEach((v, k) => (o[k] = v)), o))({}),
       changes: this.diag.changes(),
     };
   }

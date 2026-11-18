@@ -12,7 +12,7 @@ import { TASU_IFACE } from '../src/vehicle/uds/tasu';
 import { ICAM2, XVIEW } from '../src/camera/request';
 import { APP_FILES, copyLicense, LICENSE_FILE, LICENSE_SRC, M550_LICENSE_SRC, M550_PREAMBLE, NOTICE_PREAMBLE } from '../scripts/build';
 import { MARKER, stage } from '../scripts/stage';
-import { FakeTransport, flush, hasUpstream, loadUpstream, loadUpstreamDisplay, ROOT } from './helpers';
+import { FakeTransport, flush, ROOT } from './helpers';
 
 /** Официальный component.json mgu-render 0.6.21, скачанный root (work/research). */
 const RENDER_COMPONENT = join(ROOT, '..', '..', 'work', 'research', 'mgu-render-0.6.21', 'component.json');
@@ -41,11 +41,11 @@ describe('app.json', () => {
     assert.equal(m.loggingId, LOGGING_ID);
     assert.match(m.loggingId, /^[A-Z0-9]{4}$/);
     assert.deepEqual(m.mguHmi, ['ID7']);
-    assert.deepEqual(m.requires, { 'mgu-render': '0.6.21', 'mgu-deploy': '0.8.19', 'xop-camera-bridge': '0.1.2' });
+    assert.deepEqual(m.requires, { 'mgu-render': '0.6.21', 'mgu-deploy': '0.8.19', 'xop-camera-bridge': '0.1.3' });
     assert.deepEqual(m.requires, { ...REQUIRES });
     assert.doesNotMatch(JSON.stringify(m), /idrive7-renderd|2\.1\.15/, 'старый рендерер нигде не упомянут');
-    assert.equal((m as unknown as { version: string }).version, '0.1.2');
-    assert.equal((m as unknown as { screens: { title: string }[] }).screens[0].title, APP_TITLE, 'заголовок экрана = имя приложения');
+    assert.equal((m as unknown as { version: string }).version, '0.1.3');
+    assert.equal((m as unknown as { screens: { title: string }[] }).screens[0].title, '', 'нативная шапка не дублирует полноэкранную шапку приложения');
     assert.equal(nativeRu.app.title, APP_TITLE);
     assert.equal(m.autostart, undefined);
   });
@@ -111,42 +111,13 @@ describe('app.json', () => {
     await a.stop();
   });
 
-  it('экран и кнопки: один canvas-экран MAIN, только листание (без «Настроек», демо и сессии)', () => {
+  it('экран: один canvas-экран MAIN БЕЗ кнопок панели HMI — HMI нечего показать как «Далее»/«Назад» ни на каком пути', () => {
     assert.equal(m.screens.length, 1);
     assert.equal(m.screens[0].kind, 'canvas');
     assert.equal(m.screens[0].name, 'MAIN');
-    assert.deepEqual(m.screens[0].buttons.map((b) => b[0]), ['BTN_PAGE', 'BTN_PREV'], 'без BTN_SETTINGS у kit нет вкладки «Настройки»');
-    assert.ok(!('chrome' in m.screens[0]), 'kit-рамка (вкладки, панель) остаётся');
-  });
-
-  // Панель HMI iDrive 7 (display.js HMI7.btn): кнопки от x 132, каждая — ширина подписи (шрифт 'label' 40 px × 1.465)
-  // + 180 px; шире 1920 — HMI прокручивает панель. Все подписи, включая сменные (Пауза/Пуск), — без прокрутки.
-  const barSets = (): string[][] => {
-    const b = nativeRu.bar;
-    return [[b.next, b.prev]];
-  };
-
-  it('подписи панели помещаются без прокрутки (консервативная оценка 30 px HMI на символ)', () => {
-    // Замеры kit: «Next page» 412, «Previous page» 507, «Settings» 370 px → ≤ 26 px на символ; 30 — с запасом на кириллицу.
-    for (const labels of barSets()) {
-      const total = 132 + labels.reduce((s, l) => s + l.length * 30 + 180, 0);
-      assert.ok(total <= 1920, `${labels.join(' | ')}: ${total} px > 1920`);
-    }
-    assert.deepEqual(m.screens[0].buttons.map((b) => b[1]), [nativeRu.bar.next, nativeRu.bar.prev]);
-  });
-
-  it('подписи панели помещаются по модели kit (display.js HMI7, Recorder.textWidth), если есть кириллический атлас', { skip: hasUpstream ? false : 'нет checkout idrive7-apps' }, (t) => {
-    const { display, fonts } = loadUpstreamDisplay();
-    if (!fonts.has('cyrillic')) {
-      t.skip('в checkout нет kit/runtime/fonts/cyrillic.json — ширина кириллицы не измерима (см. консервативную оценку)');
-      return;
-    }
-    const meter = new (loadUpstream().record.Recorder)(1, 1);
-    const B = display.HMI7.btn;
-    for (const labels of barSets()) {
-      const total = labels.reduce((x, l) => x + Math.round(meter.textWidth(l, B.size, { font: 'label' }) * B.k) + B.pad, B.x);
-      assert.ok(total <= display.HMI7.screen.w, `${labels.join(' | ')}: ${total} px > ${display.HMI7.screen.w}`);
-    }
+    assert.deepEqual(m.screens[0].buttons, [], 'ни BTN_PAGE/BTN_PREV, ни BTN_SETTINGS');
+    assert.ok(!JSON.stringify(m).includes('BTN_PAGE') && !JSON.stringify(m).includes('BTN_PREV'));
+    assert.ok(!('chrome' in m.screens[0]), 'kit-рамка (вкладки) остаётся');
   });
 
   it('настройки: все скрыты (интерфейса настроек нет); источник по умолчанию — автомобиль; без основной камеры', () => {

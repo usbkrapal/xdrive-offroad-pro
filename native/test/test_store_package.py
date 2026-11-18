@@ -500,7 +500,7 @@ class CombinedRelease(unittest.TestCase):
 
     def assemble(self, name, **kw):
         out = os.path.join(self.tmp, name)
-        args = dict(repository='owner/repo', tag='v0.1.2', node8=self.node8, log=lambda m: None)
+        args = dict(repository='owner/repo', tag='v0.1.3', node8=self.node8, log=lambda m: None)
         args.update(kw)
         return out, rt.assemble(out, self.app_tgz, self.spec, self.bridge_js, self.helper, **args)
 
@@ -509,22 +509,22 @@ class CombinedRelease(unittest.TestCase):
         b, _s = self.assemble('b')
         names = sorted(os.listdir(a))
         self.assertEqual(names, sorted(['SHA256SUMS', 'catalog.json', 'icon.png', 'mgu-store.json', 'store_fixture@1.2.3.tgz',
-                                        'xop-camera-bridge@0.1.2.tgz', 'xop-camrx@0.1.2.tgz', 'xop-camrx-0.1.2-source.tar.gz']))
+                                        'xop-camera-bridge@0.1.3.tgz', 'xop-camrx@0.1.3.tgz', 'xop-camrx-0.1.3-source.tar.gz']))
         for n in names:
             with open(os.path.join(a, n), 'rb') as fa, open(os.path.join(b, n), 'rb') as fb:
                 self.assertEqual(fa.read(), fb.read(), n)
         with open(os.path.join(a, 'catalog.json'), encoding='utf-8') as f:
             cat = json.load(f)
         by = {c['id']: c for c in cat['components']}
-        self.assertEqual(by['store_fixture']['requires'][rt.BRIDGE_ID], '0.1.2')
+        self.assertEqual(by['store_fixture']['requires'][rt.BRIDGE_ID], '0.1.3')
         self.assertEqual(by['store_fixture']['requires']['mgu-render'], '0.6.21')
-        self.assertEqual(by[rt.BRIDGE_ID]['requires'][rt.CAMRX_ID], '0.1.2')
+        self.assertEqual(by[rt.BRIDGE_ID]['requires'][rt.CAMRX_ID], '0.1.3')
         for c in cat['components']:
-            self.assertTrue(c['artifact']['url'].startswith('https://github.com/owner/repo/releases/download/v0.1.2/'))
+            self.assertTrue(c['artifact']['url'].startswith('https://github.com/owner/repo/releases/download/v0.1.3/'))
             self.assertTrue(c['uninstallable'])
             self.assertNotIn('optional', c)
-        self.assertEqual(s['source'], 'xop-camrx-0.1.2-source.tar.gz')
-        _s2, p = v.verify_release(a, self.spec, repository='owner/repo', tag='v0.1.2', node8=self.node8)
+        self.assertEqual(s['source'], 'xop-camrx-0.1.3-source.tar.gz')
+        _s2, p = v.verify_release(a, self.spec, repository='owner/repo', tag='v0.1.3', node8=self.node8)
         self.assertEqual(list(p), [])
         _s3, p = v.verify_release(a, self.spec, repository='owner/repo', tag='catalog')
         self.assertTrue(any('artifact url' in x for x in p), p)
@@ -540,10 +540,10 @@ class CombinedRelease(unittest.TestCase):
         with open(os.path.join(a, 'catalog.json'), 'w', encoding='utf-8') as f:
             json.dump(cat, f)
         write(os.path.join(a, 'catalog 2.json'), b'{}')
-        _s, p = v.verify_release(a, self.spec, repository='owner/repo', tag='v0.1.2')
+        _s, p = v.verify_release(a, self.spec, repository='owner/repo', tag='v0.1.3')
         self.assertTrue(any('conflict copy of catalog.json' in x for x in p), p)
         os.remove(os.path.join(a, 'catalog 2.json'))
-        _s, p = v.verify_release(a, self.spec, repository='owner/repo', tag='v0.1.2')
+        _s, p = v.verify_release(a, self.spec, repository='owner/repo', tag='v0.1.3')
         text = '\n'.join(p)
         self.assertIn('does not require xop-camrx', text)
         self.assertIn('optional', text)
@@ -563,19 +563,19 @@ class CombinedRelease(unittest.TestCase):
         write(os.path.join(rel, 'catalog 2.json'), b'{"old": 1}')
         write(os.path.join(rel, 'notes.txt'), b'mine')
         with self.assertRaises(rt.PackError) as e:
-            rt.install_release(rel, q, self.app_tgz, self.spec, self.bridge_js, self.helper, 'owner/repo', 'v0.1.2', self.node8, log=lambda m: None)
+            rt.install_release(rel, q, self.app_tgz, self.spec, self.bridge_js, self.helper, 'owner/repo', 'v0.1.3', self.node8, log=lambda m: None)
         self.assertIn('notes.txt', str(e.exception))
         with open(os.path.join(rel, 'store_fixture@1.2.3.tgz'), 'rb') as f:
             self.assertEqual(f.read(), b'old app-only archive')          # nothing changed
         os.remove(os.path.join(rel, 'notes.txt'))
-        s, moved = rt.install_release(rel, q, self.app_tgz, self.spec, self.bridge_js, self.helper, 'owner/repo', 'v0.1.2',
+        s, moved = rt.install_release(rel, q, self.app_tgz, self.spec, self.bridge_js, self.helper, 'owner/repo', 'v0.1.3',
                                       self.node8, stamp='T1', log=lambda m: None)
         self.assertEqual(moved, [os.path.join(q, 'T1', 'catalog 2.json')])
         with open(moved[0], 'rb') as f:
             self.assertEqual(f.read(), b'{"old": 1}')                     # kept, byte for byte
         self.assertNotIn('catalog 2.json', os.listdir(rel))
-        self.assertEqual(s['tools'][rt.CAMRX_ID]['version'], '0.1.2')
-        _s, p = v.verify_release(rel, self.spec, repository='owner/repo', tag='v0.1.2')
+        self.assertEqual(s['tools'][rt.CAMRX_ID]['version'], '0.1.3')
+        _s, p = v.verify_release(rel, self.spec, repository='owner/repo', tag='v0.1.3')
         self.assertEqual(list(p), [])
 
 

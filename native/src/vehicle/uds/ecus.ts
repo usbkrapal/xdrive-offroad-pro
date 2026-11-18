@@ -29,8 +29,10 @@ import {
   DSC_WHEEL_SPEED,
   EGS_OIL,
   EPS_PINION,
+  FUNCTION_STATUS_QUALIFIERS_KNOWN,
   GHAS_STATES,
   LMV_MOMENT,
+  LMV_QUALIFIER_VALID,
   VDP_HEIGHTS,
   VDP_LEVEL,
   VDP_OFFSET_STATE,
@@ -120,7 +122,15 @@ export interface RecordSpec {
   readonly outputs: readonly RecordOutput[];
   /** Пригодность выхода зависит от других записей того же блока (VDP: исправность датчика и нуль). */
   readonly gate?: (value: string, others: (did: number) => DecodedRecord | null) => string | null;
+  /**
+   * Только диагностика: выходы записи на экран не попадают (смысл не установлен) — читается редко
+   * (DIAGNOSTIC_PERIOD_MS), не отнимая шину у показываемых величин.
+   */
+  readonly diagnosticOnly?: boolean;
 }
+
+/** Период записей «только диагностика» (кандидаты, флаги, сырьё). */
+export const DIAGNOSTIC_PERIOD_MS = 20000;
 
 export interface EcuSpec {
   readonly key: EcuKey;
@@ -142,12 +152,13 @@ const sig = (id: SignalId): Target => ({ kind: 'signal', id });
 const extra = (id: ExtraId): Target => ({ kind: 'extra', id });
 
 /** Значение GHAS — только когда блок в состоянии «работа» (4013 = 2); иначе — состояние вместо значения. */
-function ghas(schema: RecordSchema, periodMs: number, value: string, id: ExtraId): RecordSpec {
+function ghas(schema: RecordSchema, periodMs: number, value: string, id: ExtraId, shown = true): RecordSpec {
   return {
     schema,
     periodMs,
-    staleMs: Math.max(3000, periodMs * 4),
+    staleMs: Math.max(3000, periodMs * 3),
     outputs: [{ value, target: extra(id) }],
+    diagnosticOnly: !shown,
     gate: (_v, others) => {
       const st = others(GHAS_STATE.did);
       if (!st) return 'нет свежего состояния блока (4013)';
@@ -157,10 +168,13 @@ function ghas(schema: RecordSchema, periodMs: number, value: string, id: ExtraId
 }
 
 /** Записи IB_G05: скорости колёс (та же схема DBE4), давления ГТЦ/системы, состояния функций. */
-const fn = (schema: RecordSchema, id: ExtraId): RecordSpec => ({ schema, periodMs: 1000, staleMs: 5000, outputs: [{ value: 'status', target: extra(id) }] });
+// состояния функций: квалификаторы не описаны — только кандидаты (records.ts FUNCTION_STATUS_QUALIFIERS_KNOWN)
+const fn = (schema: RecordSchema, id: ExtraId): RecordSpec => ({ schema, periodMs: 1000, staleMs: 5000, outputs: [{ value: 'status', target: extra(id) }], diagnosticOnly: !FUNCTION_STATUS_QUALIFIERS_KNOWN });
+// Периоды — по бюджету последовательной шины (≈ 3 запроса/с при ответе 80 мс; uds.test «расписание»): показываемые
+// величины 1 раз в 1…5 с, срок свежести — 3 периода.
 const wheelSpeeds = (): RecordSpec => ({
   schema: DSC_WHEEL_SPEED,
-  periodMs: 500,
+  periodMs: 1000,
   staleMs: 3000,
   outputs: [
     ...WHEEL_KEYS.map((w) => ({ value: `speed.${w}`, target: sig(`wheelSpeed.${w}` as SignalId) })),
@@ -171,7 +185,7 @@ const IB_RECORDS: readonly RecordSpec[] = [
   wheelSpeeds(),
   {
     schema: IB_PRESSURE,
-    periodMs: 500,
+    periodMs: 1000,
     staleMs: 3000,
     outputs: [
       { value: 'tmcBar', target: extra('brakePressure.tmc') },
@@ -197,9 +211,9 @@ export const ECUS: readonly EcuSpec[] = [
       '0F21E0': '8HP hybrid — idrive7-apps zf8hp, все записи прочитаны на G20 330e',
       '0F21D0': 'GSZFB1 — sgbd_index @4be3e52; DA12 по EdiabasX rev 9.003 и бинарной выгрузке m550 (2 байта, high, −48)',
     },
-    records: [{ schema: EGS_OIL, periodMs: 2000, staleMs: 10000, outputs: [{ value: 'oilC', target: sig('temperature.gearboxC') }] }],
+    records: [{ schema: EGS_OIL, periodMs: 5000, staleMs: 15000, outputs: [{ value: 'oilC', target: sig('temperature.gearboxC') }] }],
     // у GSZFB1 у 6000 нет описания результата: его не читают
-    variants: { '0F21D0': [{ schema: EGS_OIL_DA12, periodMs: 2000, staleMs: 10000, outputs: [{ value: 'oilC', target: sig('temperature.gearboxC') }] }] },
+    variants: { '0F21D0': [{ schema: EGS_OIL_DA12, periodMs: 5000, staleMs: 15000, outputs: [{ value: 'oilC', target: sig('temperature.gearboxC') }] }] },
   },
   {
     key: 'LMV',
@@ -208,7 +222,7 @@ export const ECUS: readonly EcuSpec[] = [
     // LMV_G11 (0F2180, sgbd_index; схема DB32 по EdiabasX rev 3.002 = m550). Квалификатор ISTMOMENT без таблицы:
     // момент к передней оси остаётся кандидатом (диагностика), на экран не идёт (LMV_QUALIFIER_VALID пуст).
     identities: { '0F2180': 'LMV_G11 — sgbd_index @4be3e52, DB32 по EdiabasX rev 3.002' },
-    records: [{ schema: LMV_MOMENT, periodMs: 500, staleMs: 3000, outputs: [{ value: 'frontTorqueNm', target: sig('xdrive.frontTorqueNm') }] }],
+    records: [{ schema: LMV_MOMENT, periodMs: 500, staleMs: 3000, outputs: [{ value: 'frontTorqueNm', target: sig('xdrive.frontTorqueNm') }], diagnosticOnly: LMV_QUALIFIER_VALID.length === 0 }],
   },
   {
     key: 'DSC',
@@ -223,7 +237,7 @@ export const ECUS: readonly EcuSpec[] = [
       wheelSpeeds(),
       {
         schema: DSC_PRESSURE,
-        periodMs: 500,
+        periodMs: 1000,
         staleMs: 3000,
         outputs: [
           { value: 'circuit1Bar', target: extra('brakePressure.circuit1') },
@@ -237,7 +251,8 @@ export const ECUS: readonly EcuSpec[] = [
     addr: 0x30,
     name: 'Электроусилитель руля (EPS)',
     identities: { '0F2580': 'EPS_G05 — sgbd_index @4be3e52, DB57 по EdiabasX rev 3.003 (= EPS_G11)' },
-    records: [{ schema: EPS_PINION, periodMs: 500, staleMs: 3000, outputs: [{ value: 'pinionDeg', target: extra('epsPinionDeg') }] }],
+    // угол шестерни на экран не выводится — только диагностика
+    records: [{ schema: EPS_PINION, periodMs: 500, staleMs: 3000, outputs: [{ value: 'pinionDeg', target: extra('epsPinionDeg') }], diagnosticOnly: true }],
   },
   {
     key: 'VDP',
@@ -246,11 +261,11 @@ export const ECUS: readonly EcuSpec[] = [
     // VDP_G11 — единственный VDP G-серии в индексе; есть ли он на конкретном G07 (пневмоподвеска), решает F150.
     identities: { '0F1F50': 'VDP_G11 — sgbd_index @4be3e52, записи по EdiabasX rev 9.000' },
     records: [
-      { schema: VDP_SENSOR_STATE, periodMs: 5000, staleMs: 20000, outputs: [] },
+      { schema: VDP_SENSOR_STATE, periodMs: 10000, staleMs: 30000, outputs: [] },
       { schema: VDP_OFFSET_STATE, periodMs: 30000, staleMs: 120000, outputs: [] },
       {
         schema: VDP_HEIGHTS,
-        periodMs: 500,
+        periodMs: 1000,
         staleMs: 3000,
         outputs: WHEEL_KEYS.map((w) => ({ value: `heightMm.${w}`, target: extra(`rideHeightSensor.${w}` as ExtraId) })),
         gate: (value, others) => {
@@ -266,7 +281,8 @@ export const ECUS: readonly EcuSpec[] = [
           return null;
         },
       },
-      { schema: VDP_LEVEL, periodMs: 2000, staleMs: 10000, outputs: [{ value: 'level', target: extra('ehcLevel') }] },
+      // Три документированных уровня EHC: низкий / стандарт / высокий.
+      { schema: VDP_LEVEL, periodMs: 5000, staleMs: 15000, outputs: [{ value: 'level', target: extra('ehcLevel') }] },
     ],
   },
   {
@@ -275,13 +291,13 @@ export const ECUS: readonly EcuSpec[] = [
     name: 'Блокировка заднего дифференциала (GHAS)',
     identities: { '0F1720': 'GHAS10 — sgbd_index @4be3e52, записи по EdiabasX ghas10 rev 1.203' },
     records: [
-      { schema: GHAS_STATE, periodMs: 2000, staleMs: 10000, outputs: [{ value: 'state', target: extra('rearLock.state') }] },
-      ghas(GHAS_LOCK_TORQUE, 500, 'torqueNm', 'rearLock.torqueNm'),
-      ghas(GHAS_TARGET, 500, 'targetNm', 'rearLock.targetNm'),
-      ghas(GHAS_POSITION, 1000, 'positionInc', 'rearLock.positionInc'),
-      ghas(GHAS_DELTA_N, 1000, 'deltaRpm', 'rearLock.deltaRpm'),
-      ghas(GHAS_OIL, 5000, 'oilC', 'rearLock.oilC'),
-      ...GHAS_FLAGS.map((schema) => ({ schema, periodMs: 30000, staleMs: 120000, outputs: [] })),
+      { schema: GHAS_STATE, periodMs: 3000, staleMs: 10000, outputs: [{ value: 'state', target: extra('rearLock.state') }] },
+      ghas(GHAS_LOCK_TORQUE, 1000, 'torqueNm', 'rearLock.torqueNm'),
+      ghas(GHAS_TARGET, 1000, 'targetNm', 'rearLock.targetNm'),
+      ghas(GHAS_POSITION, 2000, 'positionInc', 'rearLock.positionInc', false),
+      ghas(GHAS_DELTA_N, 2000, 'deltaRpm', 'rearLock.deltaRpm', false),
+      ghas(GHAS_OIL, 5000, 'oilC', 'rearLock.oilC', false),
+      ...GHAS_FLAGS.map((schema) => ({ schema, periodMs: 30000, staleMs: 120000, outputs: [], diagnosticOnly: true })),
     ],
   },
   {
@@ -290,8 +306,8 @@ export const ECUS: readonly EcuSpec[] = [
     name: 'Режим движения (BDC)',
     identities: { '0F2680': 'BDC_G05 — sgbd_index @4be3e52, E468/D54D по EdiabasX BDC_G05' },
     records: [
-      { schema: BDC_FES, periodMs: 1000, staleMs: 5000, outputs: [{ value: 'mode', target: extra('driveMode') }] },
-      { schema: BDC_LWR_PITCH, periodMs: 1000, staleMs: 5000, outputs: [{ value: 'pitchDeg', target: extra('pitchVsAxlesDeg') }] },
+      { schema: BDC_FES, periodMs: 3000, staleMs: 10000, outputs: [{ value: 'mode', target: extra('driveMode') }] },
+      { schema: BDC_LWR_PITCH, periodMs: 2000, staleMs: 6000, outputs: [{ value: 'pitchDeg', target: extra('pitchVsAxlesDeg') }] },
     ],
   },
   {
@@ -300,7 +316,7 @@ export const ECUS: readonly EcuSpec[] = [
     name: 'Датчик ускорений (ACSM)',
     // раскладка 4101 не установлена: проверенных вариантов нет — только сырьё в диагностику (раз в 30 с)
     identities: {},
-    records: [{ schema: ACSM_IMU_RAW, periodMs: 30000, staleMs: 120000, outputs: [] }],
+    records: [{ schema: ACSM_IMU_RAW, periodMs: 30000, staleMs: 120000, outputs: [], diagnosticOnly: true }],
   },
 ];
 

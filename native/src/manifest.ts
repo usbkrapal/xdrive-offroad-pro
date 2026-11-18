@@ -3,7 +3,7 @@
 
 import { SCENARIO_IDS } from '../../src/domain/types';
 import { ru } from '../../src/i18n/ru';
-import { BUTTONS, SCREEN } from './app';
+import { SCREEN } from './app';
 import { DATA_MODES, DEFAULT_MODE } from './model/model';
 import { nativeRu } from './strings';
 import { manifestSignals } from './vehicle/allowlist';
@@ -39,7 +39,8 @@ export const APP_ID = 'xdrive_offroad_pro';
 export const APP_TITLE = 'Terrain Monitor';
 /** Свободный 4-символьный тег журнала (upstream: OA1x у BMW, OA93–OA9F у приложений kit). */
 export const LOGGING_ID = 'XOP1';
-export const APP_VERSION = '0.1.2';
+import { APP_VERSION } from './version';
+export { APP_VERSION };
 /**
  * Рендерер, установленный у пользователя: компонент MGU Store mgu-render 0.6.21 (его component.json:
  * id "mgu-render", version "0.6.21"). Приложение говорит с ним диалектом mgu-render/1 (renderTarget.ts, вендорный renderd.js).
@@ -48,8 +49,8 @@ export const REQUIRES = {
   'mgu-render': '0.6.21',
   // установщик MGU Store, который ставит инструменты (component.json: kind tool, units, recmgr) — как у пакета инструментов
   'mgu-deploy': '0.8.19',
-  // мост камер (root-служба; сам требует свой приёмник xop-camrx 0.1.2) — native/packaging/xop-camera-bridge/component.json
-  'xop-camera-bridge': '0.1.2',
+  // мост камер (root-служба; сам требует свой приёмник xop-camrx 0.1.3) — native/packaging/xop-camera-bridge/component.json
+  'xop-camera-bridge': '0.1.3',
 } as const;
 
 export function buildManifest(): Record<string, unknown> {
@@ -75,13 +76,11 @@ export function buildManifest(): Record<string, unknown> {
       {
         name: SCREEN,
         kind: 'canvas',
-        title: APP_TITLE,
-        // Только листание — запасной путь без касания (display.js скрывает их, где kit ведёт экран). Без BTN_SETTINGS
-        // у kit нет вкладки «Настройки»; без кнопок демо/сессии панель HMI не всплывает с лишними пунктами.
-        buttons: [
-          [BUTTONS.next, nativeRu.bar.next],
-          [BUTTONS.prev, nativeRu.bar.prev],
-        ],
+        title: '',
+        // Ни одной кнопки панели HMI: листание — вкладками kit (касание, контроллер iDrive), выход — штатная «Назад»
+        // HMI. Без кнопок у HMI нечего показать панелью «Далее»/«Назад» — ни при запуске без рендерера, ни при его
+        // потере или перезапуске (раньше display.js возвращал их на запасном пути). Без BTN_SETTINGS — нет «Настроек».
+        buttons: [],
       },
     ],
     // Все настройки скрыты (kit их не показывает, экрана настроек не открыть): значения ведёт приложение

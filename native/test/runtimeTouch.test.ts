@@ -96,6 +96,8 @@ interface Rig {
   app: AppHandle;
   settings: Settings;
   hmiVisible: Record<string, boolean>;
+  /** Картинки, отданные в собственный image-компонент HMI (программный путь). */
+  softImages: { d: Uint8Array; w: number; h: number }[];
   render(): Promise<void>;
   /** Тап по экранной точке (sx, sy): renderer пересчитывает её в логические px по последнему PLACE. */
   tapScreen(sx: number, sy: number): Promise<void>;
@@ -106,8 +108,8 @@ interface Rig {
 
 const center = (r: Rect) => [r.x + r.w / 2, r.y + r.h / 2] as const;
 
-async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess }): Promise<Rig> {
-  const srv = await FakeRenderer.start({ native: opts.native, touch: opts.touch ?? true, caps: 1 | 8 });
+async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess; caps?: number }): Promise<Rig> {
+  const srv = await FakeRenderer.start({ native: opts.native, touch: opts.touch ?? true, caps: opts.caps ?? 1 | 8 });
   const saved: Env = { MGU_RENDERD_SOCKET: process.env.MGU_RENDERD_SOCKET, MGU_RENDERD_PROTO: process.env.MGU_RENDERD_PROTO };
   const env: Env = { MGU_RENDERD_SOCKET: srv.path };
   selectRenderTarget(env); // как main.js: диалект не задаётся
@@ -123,6 +125,7 @@ async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess }):
   const comps = new Map<string, EventEmitter>();
   for (const [id] of spec.screens[0].buttons) comps.set(id, new EventEmitter());
   const hmiVisible: Record<string, boolean> = {};
+  const softImages: { d: Uint8Array; w: number; h: number }[] = [];
   const ui = {
     onVisible: () => undefined,
     isVisible: (n: string) => n === 'MAIN',
@@ -137,7 +140,7 @@ async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess }):
   let loopFn: (() => unknown) | null = null;
   const ctx: MguCtx = {
     ui: {
-      image: (name, cv) => display.present(name, cv, () => Promise.resolve()),
+      image: (name, cv) => display.present(name, cv, (_n: string, c: unknown) => (softImages.push(c as { d: Uint8Array; w: number; h: number }), Promise.resolve())),
       text: (id, s) => display.label(id, s),
       onClick: (name, fn) => comps.get(name)?.on('action', fn),
       enabled: () => undefined,
@@ -176,6 +179,7 @@ async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess }):
     app,
     settings,
     hmiVisible,
+    softImages,
     render: async () => {
       await loopFn!();
       await flush();
@@ -259,7 +263,7 @@ describe('mgu-render/1 с касанием, 1920 × 720: kit ведёт экра
     assert.equal(d.place!.full, true);
     assert.deepEqual(d.buttons(), []);
     assert.equal(d.barH(), 0);
-    for (const id of ['BTN_PAGE', 'BTN_PREV']) assert.equal(r.hmiVisible[id], false, `${id} скрыта в HMI`);
+    assert.deepEqual(Object.keys(r.hmiVisible), [], 'кнопок HMI у экрана нет вовсе');
     assert.equal(inputNote(d.own(), d as unknown as DisplayApi), null);
   });
 
@@ -384,11 +388,12 @@ describe('запасной путь: рендерер без mgu-render/1 (то�
   });
   after(() => r.close());
 
-  it('kit не ведёт экран: панель HMI «Далее»/«Назад» остаётся; причина — в журнал (inputNote)', () => {
+  it('kit не ведёт экран: и здесь НИКАКОЙ панели HMI «Далее»/«Назад» (у экрана нет кнопок); причина — в журнал (inputNote)', () => {
     const d = r.display;
     assert.equal(d.gpu!.native, false);
     assert.equal(d.own(), false);
-    assert.deepEqual(d.buttons().map((b) => b.id), ['BTN_PAGE', 'BTN_PREV'], 'листание кнопками HMI');
+    assert.deepEqual(d.buttons(), [], 'кнопок панели нет');
+    assert.deepEqual(Object.keys(r.hmiVisible), [], 'ни одна кнопка HMI не показана');
     assert.equal(inputNote(d.own(), d as unknown as DisplayApi), T.native.input.upstream);
   });
 
@@ -443,6 +448,90 @@ describe('программный путь / стандартная раскла�
       }
     } finally {
       kit.cleanup();
+    }
+  });
+});
+
+/* ---------------- потеря рендерера: запасной путь без панели HMI ---------------- */
+
+describe('рендерер пропал / перезапуск / штатный экран сверху: страница не пропадает, панели HMI «Далее»/«Назад» нет никогда', () => {
+  /** Картинка в image-компоненте HMI — кадр страницы (не пустой фон). */
+  const drawn = (c: { d: Uint8Array; w: number; h: number } | undefined) => {
+    if (!c) return false;
+    let other = 0;
+    for (let i = 0; i < c.d.length; i += 4 * 97) if (!(c.d[i] === 0x04 && c.d[i + 1] === 0x06 && c.d[i + 2] === 0x0a)) other++;
+    return other > 50;
+  };
+  const noPager = (r: Rig) => {
+    assert.deepEqual(r.display.buttons(), [], 'кнопок панели нет');
+    assert.ok(!Object.keys(r.hmiVisible).some((k) => r.hmiVisible[k]), 'ни одна кнопка HMI не включена');
+  };
+
+  it('обрыв соединения: в HMI — сам кадр страницы (без панели), переподключение: снова kit ведёт экран, кадр сразу', async () => {
+    const r = await rig({ native: true });
+    try {
+      await r.render();
+      noPager(r);
+      const places = r.srv.of(MSG.PLACE).length;
+      r.srv.drop();
+      await r.srv.until(() => !r.display.gpu!.ready, 'обрыв замечен');
+      await flush();
+      noPager(r);
+      assert.ok(drawn(r.softImages[r.softImages.length - 1]), 'страница в HMI, не пустой экран');
+      await r.render();
+      assert.ok(drawn(r.softImages[r.softImages.length - 1]), 'кадры идут в HMI и во время потери');
+      await r.srv.until(() => r.srv.of(MSG.PLACE).length > places && !!r.display.gpu!.ready, 'переподключение', 6000);
+      await flush();
+      assert.ok(r.display.own());
+      noPager(r);
+      const before = r.srv.msgs.length;
+      await r.render();
+      await new Promise((ok) => setTimeout(ok, 50));
+      assert.ok(r.srv.of(MSG.FRAME).some((m) => r.srv.msgs.indexOf(m) >= before), 'после переподключения кадр уходит рендереру');
+    } finally {
+      await r.close();
+    }
+  });
+
+  it('рендерер ушёл насовсем: программный путь рисует страницу, панели HMI нет (сколько бы ни прошло)', async () => {
+    const r = await rig({ native: true });
+    try {
+      await r.render();
+      (r.display.gpu as unknown as { closed: boolean }).closed = true; // без переподключения
+      r.srv.drop();
+      await r.srv.until(() => !r.display.gpu!.ready, 'обрыв замечен');
+      for (let i = 0; i < 3; i++) await r.render();
+      noPager(r);
+      assert.ok(drawn(r.softImages[r.softImages.length - 1]));
+      assert.equal(inputNote(r.display.own(), r.display as unknown as DisplayApi), T.native.input.waiting);
+    } finally {
+      await r.close();
+    }
+  });
+
+  it('штатный экран сверху (рендерер: «не в фокусе»): kit экран не держит, панели HMI нет; снова в фокусе — снова свой', async () => {
+    const r = await rig({ native: true, caps: 1 | 4 | 8 });
+    try {
+      await r.render();
+      const state = (on: number, front: number) => {
+        const p = Buffer.alloc(12);
+        p.writeUInt32LE(on, 4);
+        p.writeUInt32LE(front, 8);
+        r.srv.send(0x4d520102, p);
+      };
+      state(0, 0);
+      await new Promise((ok) => setTimeout(ok, 1700));
+      await flush();
+      assert.equal((r.display as unknown as { blocked: boolean }).blocked, true);
+      assert.equal(r.display.own(), false, 'kit не держит экран поверх штатного');
+      noPager(r);
+      state(1, 1);
+      await new Promise((ok) => setTimeout(ok, 100));
+      await flush();
+      assert.equal(r.display.own(), true);
+      noPager(r);
+    } finally {
+      await r.close();
     }
   });
 });

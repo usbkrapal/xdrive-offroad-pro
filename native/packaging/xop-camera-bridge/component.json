@@ -2,7 +2,7 @@
   "_comment": "Source manifest of the xop-camera-bridge tool kit (mgu-store deploy/README.md, 'Artifacts' / 'component.json'). 'from' is relative to the project root. native/scripts/release_tools.py packs it: the kit's own component.json carries only the deploy tool's fields (sha256 per file, units by name); 'catalog' goes to catalog.json only.",
   "id": "xop-camera-bridge",
   "kind": "tool",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "title": "Terrain Monitor: камеры",
   "description": "Мост камер Terrain Monitor: по запросу страницы «Камеры» запускает приёмник xop-camrx (передняя, левая, правая) и останавливает его. Только чтение видеопотока.",
   "mguHmi": ["ID7"],
@@ -17,7 +17,7 @@
   "recmgr": ["xop-camera-bridge"],
   "restart": ["xop-camera-bridge.service"],
   "catalog": {
-    "requires": { "mgu-deploy": "0.8.19", "xop-camrx": "0.1.2" },
+    "requires": { "mgu-deploy": "0.8.19", "xop-camrx": "0.1.3" },
     "uninstallable": true
   }
 }

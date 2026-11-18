@@ -16,6 +16,8 @@ import type { DisplayApi, LoopHandle, MguCtx, SettingsApi, Surface } from './pla
 import { drawPageBrand, HEADER_BRAND } from './render/brand';
 import { badges } from './render/chrome';
 import { diagnosticsSheet, type DiagLine } from './render/diagnostics';
+import { SupportTaps, supportLines } from './render/support';
+import { APP_VERSION } from './version';
 import { DialTexture } from './render/dial';
 import { Phases, stageRates } from './render/drivetrain';
 import { H, W } from './render/layout';
@@ -77,12 +79,12 @@ export interface CameraDeps {
 
 export const SCREEN = 'MAIN';
 export const GRAPHIC = 'MAIN_GFX';
-/** Кнопки панели HMI — только листание (запасной путь без касания). */
-export const BUTTONS = { next: 'BTN_PAGE', prev: 'BTN_PREV' } as const;
 /** Частота программного пути (без GPU-рендерера); с рендерером kit вызывает отрисовку каждый кадр дисплея. */
 export const SOFTWARE_FPS = 10;
 /** Индекс страницы «Камеры» (PAGES). */
 export const CAMERA_PAGE = 4;
+/** Индекс страницы «Системы» (PAGES). */
+export const SYSTEMS_PAGE = 3;
 
 /** Значения скрытых настроек, которые ведёт приложение (интерфейса настроек нет). */
 export const SETTING_VALUES = { dataSource: 'vehicle', layout: 'full', renderer: 'auto' } as const;
@@ -152,7 +154,7 @@ export function cameraLines(feeds: CameraFeeds, req: CameraRequest | null): Diag
   (Object.keys(d.views) as CameraId[]).forEach((id) => out.push({ label: `   ${id}`, value: d.views[id].live ? 'живой' : d.views[id].reason, tone: d.views[id].live ? 'ok' : 'warn' }));
   if (req) {
     const s = req.state;
-    out.push({ label: 'Блок камер (currentState)', value: s ? `${s.application}/${s.mode}/${s.perspective}` : 'нет состояния', tone: 'dim' });
+    out.push({ label: 'Блок камер (currentState)', value: s ? `${req.stateSource ?? '—'} · ${s.application}/${s.mode}/${s.perspective}` : 'нет состояния', tone: 'dim' });
     out.push({ label: 'Запрос вида', value: `${req.reason || '—'}${req.ownCookie !== null ? ` · свой cookie ${req.ownCookie}` : ''}`, tone: 'dim' });
   } else out.push({ label: 'Запрос вида', value: 'выключен: нет proxy/call в ctx.signals', tone: 'warn' });
   return out;
@@ -248,6 +250,19 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
     videoSent.add(VIDEO_ID[id]);
     return cv.video(VIDEO_ID[id], x, y, w, h, 2);
   };
+  // Скрытый лист поддержки (render/support.ts): 5 касаний уже открытой вкладки «Системы» или «Камеры» за 3 с.
+  // Страница не меняется (на «Камерах» запрос/кадры остаются как есть — лист их не запускает и не останавливает).
+  const supportTaps = new SupportTaps();
+  const openSupport = (kind: 'systems' | 'cameras'): boolean => {
+    if (!ctx.sheet) return false;
+    log.info(`support sheet opened (${kind})`);
+    return ctx.sheet(
+      diagnosticsSheet(
+        () => model.diagnostics(),
+        () => supportLines(kind, model.diagnostics(), cameraLines(feeds, camReq), inputLines(ctx.display), APP_VERSION),
+      ),
+    );
+  };
   const openDiagnostics = (): boolean => {
     if (!dev.diagnostics || !ctx.sheet) return false;
     return ctx.sheet(diagnosticsSheet(() => model.diagnostics(), () => inputLines(ctx.display).concat(cameraLines(feeds, camReq))));
@@ -307,9 +322,15 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
     kick();
   };
 
-  ctx.onTab((i) => setPage(i));
-  ctx.ui.onClick(BUTTONS.next, () => setPage(page + 1));
-  ctx.ui.onClick(BUTTONS.prev, () => setPage(page - 1));
+  ctx.onTab((i, closedSheet) => {
+    // касание вкладки, закрывшее лист, — не счёт; другая вкладка — сброс счёта
+    const eligible = !closedSheet && (page === SYSTEMS_PAGE || page === CAMERA_PAGE);
+    if (supportTaps.tap(i, page, eligible, now())) {
+      openSupport(page === CAMERA_PAGE ? 'cameras' : 'systems');
+      return;
+    }
+    if (i !== page) setPage(i);
+  });
   // Знак приложения в начале шапки (вендорная правка display.js; без неё свойство ни на что не влияет).
   if (ctx.display) ctx.display.brand = HEADER_BRAND;
 

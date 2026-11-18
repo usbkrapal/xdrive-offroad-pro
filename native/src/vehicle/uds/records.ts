@@ -14,6 +14,11 @@ const NONE: Readonly<Record<string, string>> = {};
 export interface DecodedRecord {
   readonly values: Readonly<Record<string, FieldValue>>;
   readonly reasons: Readonly<Record<string, string>>;
+  /**
+   * Поля, у которых null значит «смысл/достоверность не установлены» (нет данных), а не «недопустимое значение»
+   * (ошибка). Например, состояние при неописанных квалификаторах, момент LMV при неописанном квалификаторе.
+   */
+  readonly unknown?: Readonly<Record<string, true>>;
 }
 
 export interface RecordSchema {
@@ -73,7 +78,9 @@ export const LMV_MOMENT: RecordSchema = {
       targetNm: s16(p, 4) / 4,
       targetQualifier: qt,
     };
-    return { values, reasons: ok ? NONE : { frontTorqueNm: `квалификатор 0x${q.toString(16)}: значение квалификатора не описано в источниках` } };
+    return ok
+      ? { values, reasons: NONE }
+      : { values, reasons: { frontTorqueNm: `квалификатор 0x${q.toString(16)}: значение квалификатора не описано в источниках` }, unknown: { frontTorqueNm: true } };
   },
 };
 
@@ -276,7 +283,11 @@ function functionStatus(did: number, name: string, codes: readonly number[]): Re
       else {
         values.statusCandidate = c;
         if (FUNCTION_STATUS_QUALIFIERS_KNOWN) values.status = c;
-        else reasons.status = `квалификаторы 0x${q.toString(16)}/0x${qe.toString(16)} без опубликованного смысла: состояние ${c} — только кандидат`;
+        else {
+          reasons.status = `квалификаторы 0x${q.toString(16)}/0x${qe.toString(16)} без опубликованного смысла: состояние ${c} — только кандидат`;
+          // не ошибка блока: достоверность не установлена — «нет данных»
+          return { values, reasons, unknown: { status: true } };
+        }
       }
       return { values, reasons };
     },
