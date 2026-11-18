@@ -1,21 +1,25 @@
 // npm run native:package -- [--repository <owner>/<name> [--tag <tag>]]
 //
-// Store-пакет без BMW SDK для релиза GitHub / каталога MGU Store:
+// Объединённый Store-выпуск 0.1.2 без BMW SDK (ничего не публикуется):
 //   1. проверяет вендорное MIT-дерево (vendor/idrive7-apps, PROVENANCE.json);
-//   2. кладёт собранное приложение (native/dist/xdrive_offroad_pro) в vendor/idrive7-apps/apps/<id>;
-//   3. python3 -I kit/tools/build.py --language ru --store-package <id> (без оболочки);
-//   4. проверяет пакет (verify_store_package.py) и только тогда пишет native/release:
-//      <id>@<версия>.tgz, icon.png, catalog.json, mgu-store.json, SHA256SUMS — и проверяет их ещё раз.
-// Версия берётся из сгенерированного build.py package.json (локализованная спецификация).
-// URL артефакта по умолчанию относительный (каталог в папке / на флешке / по HTTPS рядом с пакетом);
-// с --repository — ссылка на скачивание из релиза GitHub (тег по умолчанию — "catalog", обычный релиз
-// каталога: Store читает его без API и без лимита запросов). Ничего не публикуется.
+//   2. кладёт собранное приложение (native/dist/xdrive_offroad_pro) в vendor/idrive7-apps/apps/<id> и запускает
+//      python3 -I kit/tools/build.py --language ru --store-package <id> (без оболочки); проверяет пакет;
+//   3. собирает bridge.js моста камер (bundle-bridge.ts, Node 8.7);
+//   4. берёт приёмник native/camrx/build/target/xop-camrx (sh native/camrx/build.sh target; без него — ошибка,
+//      хостовая сборка или заглушки не подставляются);
+//   5. python3 -I native/scripts/release_tools.py release: наборы xop-camera-bridge и xop-camrx (формат deploy),
+//      исходники xop-camrx (GPL), catalog.json с цепочкой app -> bridge -> camrx, mgu-store.json, icon.png,
+//      SHA256SUMS; всё проверяется до и после переноса в native/release. Копии-конфликты iCloud/Finder
+//      ("catalog 2.json") уходят нетронутыми в native/release-quarantine/<время>/, чужие файлы останавливают сборку.
+// URL артефактов: без --repository относительные (папка/флешка/HTTPS рядом с catalog.json); с --repository —
+// загрузки неизменяемого релиза GitHub, по умолчанию тег v<версия> (catalog.json потом выкладывается отдельно в
+// релиз "catalog").
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, posix } from 'node:path';
-import { APP_ID, APP_TITLE } from '../src/manifest';
+import { APP_ID } from '../src/manifest';
+import { BRIDGE_JS, bundleBridge } from './bundle-bridge';
 import { NATIVE } from './bundle';
 import { OUT_DIR } from './build';
 import { stage } from './stage';
@@ -25,7 +29,9 @@ export const RELEASE_DIR = join(NATIVE, 'release');
 export const VERIFIER = join(NATIVE, 'scripts', 'verify_store_package.py');
 export const CATALOG_TAG = 'catalog';
 export const ICON_NAME = 'icon.png';
-export const META_FILES = ['catalog.json', 'mgu-store.json', ICON_NAME, 'SHA256SUMS'] as const;
+export const RELEASE_TOOLS = join(NATIVE, 'scripts', 'release_tools.py');
+export const CAMRX_BIN = join(NATIVE, 'camrx', 'build', 'target', 'xop-camrx');
+export const QUARANTINE_DIR = join(NATIVE, 'release-quarantine');
 const LANGUAGE = 'ru';
 
 export interface ReleaseOptions {
@@ -72,49 +78,7 @@ export function parseArgs(argv: readonly string[]): ReleaseOptions {
   }
   if (tag !== undefined && (!TAG_RE.test(tag) || tag.includes('..'))) fail(`--tag ${JSON.stringify(tag)} is not a plain release tag`);
   if (tag !== undefined && repository === undefined) fail('--tag needs --repository (relative URLs need no tag)');
-  return { repository, tag: repository ? (tag ?? CATALOG_TAG) : undefined };
-}
-
-/** Относительный URL (рядом с catalog.json) или browser_download_url публичного релиза GitHub. */
-export function artifactUrl(name: string, opts: ReleaseOptions): string {
-  if (!opts.repository) return name;
-  return `https://github.com/${opts.repository}/releases/download/${opts.tag ?? CATALOG_TAG}/${name}`;
-}
-
-export function buildCatalog(pkg: PackageSummary, iconSha256: string, opts: ReleaseOptions): Record<string, unknown> {
-  return {
-    schema: 2,
-    components: [
-      {
-        id: pkg.id,
-        kind: 'app',
-        title: APP_TITLE,
-        description: pkg.description,
-        version: pkg.version,
-        artifact: { name: pkg.file, size: pkg.size, sha256: pkg.sha256, url: artifactUrl(pkg.file, opts) },
-        requires: { ...pkg.requires },
-        uninstallable: true,
-        mguHmi: [...pkg.mguHmi],
-        icon: artifactUrl(ICON_NAME, opts),
-        iconSha256,
-      },
-    ],
-  };
-}
-
-export function buildStoreMeta(pkg: PackageSummary, iconSha256: string): Record<string, unknown> {
-  return { apps: { [pkg.id]: { title: APP_TITLE, description: pkg.description, icon: ICON_NAME, iconSha256 } } };
-}
-
-export const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
-
-export function sha256sums(dir: string, names: readonly string[]): string {
-  return [...names].sort().map((n) => `${sha256(readFileSync(join(dir, n)))}  ${n}\n`).join('');
-}
-
-/** Файлы, которыми управляет этот скрипт в native/release (прочие не трогаются, а мешают — ошибка). */
-export function managed(name: string): boolean {
-  return (META_FILES as readonly string[]).includes(name) || (name.startsWith(`${APP_ID}@`) && name.endsWith('.tgz'));
+  return { repository, tag };
 }
 
 function run(cmd: string, args: string[], cwd: string, capture: boolean): { status: number; stdout: string; stderr: string } {
@@ -130,25 +94,18 @@ export interface VerifyTarget {
 
 const APP_TARGET: VerifyTarget = { spec: join(OUT_DIR, 'app.json'), language: LANGUAGE };
 
-/** verify_store_package.py; бросает ошибку с её списком проблем. */
-export function runVerifier(mode: 'package' | 'release', path: string, opts: ReleaseOptions = {}, target: VerifyTarget = APP_TARGET): PackageSummary {
-  const args = ['-I', VERIFIER, mode, path, '--spec', target.spec, '--language', target.language];
-  if (opts.repository) args.push('--repository', opts.repository, '--tag', opts.tag ?? CATALOG_TAG);
-  const r = run('python3', args, NATIVE, true);
-  if (r.status !== 0) fail(`${mode} verification failed:\n${r.stderr.trim() || r.stdout.trim()}`);
+/** verify_store_package.py package; бросает ошибку с её списком проблем. */
+export function verifyAppPackage(path: string, target: VerifyTarget = APP_TARGET): PackageSummary {
+  const r = run('python3', ['-I', VERIFIER, 'package', path, '--spec', target.spec, '--language', target.language], NATIVE, true);
+  if (r.status !== 0) fail(`package verification failed:\n${r.stderr.trim() || r.stdout.trim()}`);
   return JSON.parse(r.stdout) as PackageSummary;
 }
 
-/** Записать в dir пакет, значок и метаданные (catalog.json, mgu-store.json, SHA256SUMS). */
-export function writeRelease(dir: string, tgz: string, icon: string, pkg: PackageSummary, opts: ReleaseOptions): string[] {
-  copyFileSync(tgz, join(dir, pkg.file));
-  copyFileSync(icon, join(dir, ICON_NAME));
-  const iconSha = sha256(readFileSync(join(dir, ICON_NAME)));
-  writeFileSync(join(dir, 'catalog.json'), `${JSON.stringify(buildCatalog(pkg, iconSha, opts), null, 2)}\n`);
-  writeFileSync(join(dir, 'mgu-store.json'), `${JSON.stringify(buildStoreMeta(pkg, iconSha), null, 2)}\n`);
-  const names = [pkg.file, ICON_NAME, 'catalog.json', 'mgu-store.json'];
-  writeFileSync(join(dir, 'SHA256SUMS'), sha256sums(dir, names));
-  return [...names, 'SHA256SUMS'];
+/** Аргументы release_tools.py release (отдельно — для проверки и для печати команды). */
+export function releaseArgs(appTgz: string, opts: ReleaseOptions, spec = APP_TARGET.spec): string[] {
+  const args = ['-I', RELEASE_TOOLS, 'release', '--release-dir', RELEASE_DIR, '--quarantine', QUARANTINE_DIR, '--app-tgz', appTgz, '--spec', spec, '--bridge-js', BRIDGE_JS, '--camrx', CAMRX_BIN];
+  if (opts.repository) args.push('--repository', opts.repository, '--tag', opts.tag as string);
+  return args;
 }
 
 /** Убрать прежний вывод этого приложения в vendor/idrive7-apps/dist (только его). */
@@ -159,11 +116,11 @@ function cleanVendorDist(dist: string): void {
   }
 }
 
-export function packageStore(opts: ReleaseOptions, log: (s: string) => void = console.log): PackageSummary {
+export function packageStore(opts: ReleaseOptions, log: (s: string) => void = console.log): PackageSummary & { tag?: string } {
   const problems = checkVendor();
   if (problems.length) fail(`vendor/idrive7-apps does not verify (npm run native:vendor):\n  ${problems.join('\n  ')}`);
   if (!existsSync(join(OUT_DIR, 'app.json'))) fail(`${join(OUT_DIR, 'app.json')} is missing — run npm run native:build first`);
-  if (!existsSync(VERIFIER)) fail(`${VERIFIER} is missing`);
+  if (!existsSync(VERIFIER) || !existsSync(RELEASE_TOOLS)) fail(`${VERIFIER} or ${RELEASE_TOOLS} is missing`);
 
   mkdirSync(join(VENDOR_DIR, 'apps'), { recursive: true });
   const staged = stage(VENDOR_DIR);
@@ -185,26 +142,24 @@ export function packageStore(opts: ReleaseOptions, log: (s: string) => void = co
   if (outputs.length !== 1 || outputs[0] !== tgzName) fail(`expected only ${tgzName} in vendor/idrive7-apps/dist, found ${outputs.join(', ') || 'nothing'}`);
 
   const tgz = join(dist, tgzName);
-  const pkg = runVerifier('package', tgz);
+  const pkg = verifyAppPackage(tgz);
   log(`verified ${pkg.file}: ${pkg.size} bytes, sha256 ${pkg.sha256}`);
-  const iconSrc = join(dist, APP_ID, 'source', ...pkg.icon.split('/'));
-  if (!existsSync(iconSrc)) fail(`${iconSrc} is missing`);
+  if (opts.repository && !opts.tag) opts = { ...opts, tag: `v${pkg.version}` };
 
-  // Сначала во временную папку рядом, проверка, затем замена управляемых файлов в native/release.
-  mkdirSync(RELEASE_DIR, { recursive: true });
-  const foreign = readdirSync(RELEASE_DIR).filter((n) => !managed(n) && n !== '.gitkeep');
-  if (foreign.length) fail(`native/release contains files this tool does not manage: ${foreign.join(', ')}; not touching it`);
-  const tmp = mkdtempSync(join(NATIVE, '.release-'));
-  try {
-    writeRelease(tmp, tgz, iconSrc, pkg, opts);
-    runVerifier('release', tmp, opts);
-    for (const n of readdirSync(RELEASE_DIR)) if (managed(n)) rmSync(join(RELEASE_DIR, n), { force: true });
-    for (const n of readdirSync(tmp)) renameSync(join(tmp, n), join(RELEASE_DIR, n));
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
+  // Камеры: мост (Node 8) и приёмник (готовая сборка x86-64 Linux; ничем не подменяется).
+  const bridge = bundleBridge();
+  log(`bundled ${bridge.file}: ${bridge.bytes} bytes (${bridge.inputs.length} inputs; requires ${bridge.requires.join(', ')})`);
+  if (!existsSync(CAMRX_BIN) || statSync(CAMRX_BIN).size === 0) {
+    fail(`${CAMRX_BIN} is missing or empty: build it with sh native/camrx/build.sh target (no host build or stub is ever packaged); nothing was written to native/release`);
   }
-  runVerifier('release', RELEASE_DIR, opts);
-  return pkg;
+
+  // Сборка, проверка и перенос в native/release — release_tools.py (копии-конфликты — в карантин, чужие файлы — стоп).
+  const r = run('python3', releaseArgs(tgz, opts), NATIVE, true);
+  if (r.stderr.trim()) log(r.stderr.trim());
+  if (r.status !== 0) fail(`release_tools.py release failed (exit ${r.status}); see above`);
+  const summary = JSON.parse(r.stdout) as { quarantined?: string[] };
+  if (summary.quarantined && summary.quarantined.length) log(`conflict copies moved (not deleted): ${summary.quarantined.join(', ')}`);
+  return { ...pkg, tag: opts.tag } as PackageSummary & { tag?: string };
 }
 
 const isMain = process.argv[1] && /native[\\/]scripts[\\/]package-store\.ts$/.test(process.argv[1]);
@@ -217,8 +172,8 @@ if (isMain) {
     for (const n of readdirSync(RELEASE_DIR).sort()) console.log(`  ${n}  ${size(n)} bytes`);
     console.log(
       opts.repository
-        ? `catalog URLs point to the ${opts.tag} release of ${opts.repository}: upload ${pkg.file} and ${ICON_NAME} there; catalog.json goes to the release tagged "${CATALOG_TAG}" with ${ICON_NAME}.`
-        : 'catalog URLs are relative (a folder, USB stick or HTTPS directory holding these files); pass --repository <owner>/<name> [--tag <tag>] for GitHub release URLs.',
+        ? `artifact URLs point to the immutable ${pkg.tag} release of ${opts.repository}: every file but catalog.json goes there; catalog.json (and ${ICON_NAME}) later to the release tagged "${CATALOG_TAG}". Nothing was uploaded.`
+        : 'artifact URLs are relative (a folder, USB stick or HTTPS directory holding these files); pass --repository <owner>/<name> [--tag v<version>] for GitHub release URLs.',
     );
   } catch (e) {
     console.error(String((e as Error).message ?? e));

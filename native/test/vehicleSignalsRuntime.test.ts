@@ -195,6 +195,40 @@ describe('vendor signals.js watch(): опрос и жизненный цикл (
     await res.shutdown();
   });
 
+  it('5 Гц: fieldPollMs 200 мс — таймер 200 мс, ровно 5 чтений в секунду (без округления до 1 с); медленное поле — своим периодом', async () => {
+    const rt = load({ [V2]: ['fast', 'temp'] });
+    const got: number[] = [];
+    const res = await rt.watch(V2, '1', { fast: (v) => got.push(Number(v)), temp: () => undefined }, log(rt), {
+      pollMs: 200,
+      fieldPollMs: { fast: 200, temp: 5000 },
+    });
+    assert.deepEqual([...rt.timers.values()].map((t) => t.ms), [200], 'интервал интерфейса — самый короткий период');
+    rt.proxy.setAvailable(true);
+    await settle();
+    rt.proxy.answer('fast', 0);
+    rt.proxy.answer('temp', 0);
+    await settle();
+    const start = rt.proxy.count('fast');
+    // 10 с реального времени таймера, ответ на каждое чтение сразу
+    for (let i = 1; i <= 50; i++) {
+      await rt.tick(200);
+      rt.proxy.answer('fast', i);
+      rt.proxy.answer('temp', i);
+      await settle();
+    }
+    assert.equal(rt.proxy.count('fast') - start, 50, '5 чтений в секунду × 10 с');
+    assert.equal(got.length, 51, 'каждый ответ — отсчёт');
+    const temps = rt.proxy.count('temp');
+    assert.ok(temps >= 2 && temps <= 3, `температура раз в 5 с: ${temps}`);
+    // медленный ответ (дольше периода) не накапливает запросов: тики пропускаются
+    await rt.tick(200);
+    await rt.tick(200);
+    await rt.tick(200);
+    assert.equal(rt.proxy.pending.filter((p) => p.field === 'fast').length, 1);
+    assert.equal(res.reads.fast.skipped, 2);
+    await res.shutdown();
+  });
+
   it('висящее чтение не накладывается: тики пропускаются, очередь не растёт; неудача — не отсчёт, затем снова читаем', async () => {
     const rt = load({ [V2]: ['a', 'b'] });
     const got: string[] = [];

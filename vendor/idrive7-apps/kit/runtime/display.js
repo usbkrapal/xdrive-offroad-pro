@@ -676,6 +676,8 @@ class Display {
         r.place = this.active() ? this.place : null;
         // the kit runs the screen: buttons drawn on the page (G.button) take the place of the bar's
         r.own = this.own() && this.active();
+        // video (op 19) only where the renderer takes it: mgu-render/1 offering video, the GPU path showing this screen
+        r.videoOk = this.active() && !!(this.gpu && this.gpu.videoOk);
         r.extra = r.own && this.place.extra ? this.place.extra : 0;
         return r;
     }

@@ -281,7 +281,7 @@ export function drawDrivetrain(cv: Surface, s: SignalMap, ph: Phases, box: Stage
   const blink = blinkLevel(ph.get('blink'));
   for (const w of WHEELS) drawWheel(cv, w, wheel[w], motion.rates[`t${w}`] > 0, ph.get(`t${w}`), blink, sc, P, L);
 
-  if (box.full) drawAnnotations(cv, s, motion, box, sc, ox, oy);
+  if (box.full) drawAnnotations(cv, s, box, sc, ox, oy);
 
   if (!anyLive) {
     text(cv, T.drivetrain.allLost, X(IMG_W / 2), Y(IMG_H / 2), 26, C.warn, { align: 'center' });
@@ -508,8 +508,8 @@ function clipLine(cv: Surface, a: Pt, b: Pt, y0: number, y1: number, w: number, 
   cv.line(ax, ay, bx, by, w, c);
 }
 
-/** Выноски, подписи колёс и легенда (только полный режим «Рельефа»). */
-function drawAnnotations(cv: Surface, s: SignalMap, motion: MotionModel, box: StageBox, sc: number, ox: number, oy: number): void {
+/** Выноски, подписи колёс и пояснение к пружинам (только полный режим «Рельефа»). */
+function drawAnnotations(cv: Surface, s: SignalMap, box: StageBox, sc: number, ox: number, oy: number): void {
   const t = T;
   const X = (x: number) => ox + x * sc;
   const Y = (y: number) => oy + y * sc;
@@ -577,18 +577,7 @@ function drawAnnotations(cv: Surface, s: SignalMap, motion: MotionModel, box: St
       text(cv, t.wheels[w].code, x + ruW + 4, y, 11, C.dim);
     }
   }
-  // Легенда.
-  const estimate = motion.front.source === 'share' || motion.rear.source === 'share';
-  const lx = box.x + box.w - 6;
-  const legend: [string, string][] = [
-    [estimate ? t.drivetrain.legendFlowEstimate : t.drivetrain.legendFlow, C.cold],
-    [t.drivetrain.legendSlip, C.warn],
-    [t.drivetrain.legendBrake, C.red],
-  ];
-  legend.forEach(([label, col], i) => {
-    const y = box.y + 14 + i * 16;
-    cv.line(lx - 18, y - 4, lx, y - 4, 2, col);
-    text(cv, label, lx - 24, y, 12, C.dim, { align: 'right' });
-  });
+  // Цветовой легенды (момент / буксование / торможение) нет: значения подписаны выносками. Остаётся пояснение
+  // к длине пружин стоек — это не цвет, а геометрия.
   text(cv, t.drivetrain.legendTravel, box.x + 6, box.y + box.h - 2, 12, C.dim);
 }

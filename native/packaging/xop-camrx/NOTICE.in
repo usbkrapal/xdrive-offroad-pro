@@ -1,0 +1,21 @@
+xop-camrx {version} (Terrain Monitor camera receiver)
+
+Copyright (C) 2026 Terrain Monitor contributors.
+Contains code from robertnisipeanu/idrive-apps (waze-on-cluster, cluster-render), Copyright (C) 2026 Robert
+Nisipeanu, some of it modified (each modified file says so at its top).
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General
+Public License as published by the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See LICENSE (the
+GNU General Public License version 3) beside this file.
+
+The MSDK interface headers it is compiled with are Intel's, under the MIT licence in
+LICENSE.intel-mfx-headers. The head unit's own libraries it loads at run time (libmfxhw64, libva, libva-drm,
+the IAS AVB bridge, glibc) are not part of this component and are not distributed with it.
+
+Corresponding source
+--------------------
+The complete corresponding source of this binary, with the scripts that build and install it, is the release
+asset {source_name} (sha256 {source_sha256}), published in the same release as this component's archive
+{kit_name}{source_where}. It lists the upstream commit and which upstream files were changed (PROVENANCE.txt).

@@ -1,0 +1,24 @@
+[Unit]
+Description=xop-camera-bridge: camera views for Terrain Monitor (starts and stops xop-camrx on the app's request)
+RequiresMountsFor=/var/opt
+After=local-fs.target
+
+[Service]
+# root: the frame files /dev/shm/mgu-video-xop-* must belong to root for mgu-render (PROTOCOL.md "Video"), and the
+# helper opens the render node and the AVB bridge. The app talks to it over /run/xop-camera-bridge/ctl.sock only.
+ExecStart=/usr/bin/node /var/opt/xop-camera-bridge/current/bridge.js
+# The control socket's group: the OAP apps' group, so only apps (and root) can connect (mode 0660).
+Environment=XOP_CTL_GROUP=tm_oap_app
+RuntimeDirectory=xop-camera-bridge
+RuntimeDirectoryMode=0755
+# The helper is a child of this service: stopping or restarting the service (an update) stops it too.
+KillMode=control-group
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+# The unit's system.conf sends stdout to null by default; the bridge logs there.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

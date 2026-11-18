@@ -9,3 +9,8 @@ native/.release-*/
 __pycache__/
 *.pyc
 native/release/
+
+native/build/
+native/camrx/build/
+native/release-quarantine/
+packaging-handoff.md

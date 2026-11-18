@@ -16,5 +16,5 @@
     "allowImportingTsExtensions": false,
     "types": ["node"]
   },
-  "include": ["src", "scripts", "test"]
+  "include": ["src", "scripts", "test", "bridge"]
 }

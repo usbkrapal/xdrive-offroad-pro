@@ -14,6 +14,7 @@ import { flush } from './helpers';
 
 const CDS = 'de.bmw.infotainment.vehicle.CDS';
 const CDS2 = 'de.bmw.infotainment.vehicle.CDS2';
+const FES = 'de.bmw.infotainment.drivingexcitement.FES';
 const V2 = 'de.bmw.infotainment.vehicle.Vehicle2';
 const VI = 'de.bmw.infrastructure.VehicleInformation';
 const STEER = 'de.bmw.chassis.SteeringAngle';
@@ -128,7 +129,12 @@ describe('allowlist: манифест, флаги, периоды опроса',
     assert.equal(m[DSC].StabilizationManagement, 's');
     for (const f of VEHICLE_FIELDS) {
       if (f.flags === 's') assert.equal(f.pollMs, undefined, `${f.field}: без геттера не опрашивается`);
-      else assert.ok(f.pollMs && f.pollMs >= 1000, `${f.field}: период опроса`);
+      // быстрые — 5 Гц (не чаще: одно чтение на поле в полёте, таймаут привязки 3 с); температуры/TPMS — реже
+      else assert.ok(f.pollMs && f.pollMs >= 200, `${f.field}: период опроса`);
+    }
+    const slow = ['statusEngineTemperature', 'statusTyrePressure', 'statusTyreTemperature', 'statusNewCurrentUnitsStatusExt'];
+    for (const f of VEHICLE_FIELDS.filter((x) => x.flags === 'rs')) {
+      assert.equal(f.pollMs, slow.includes(f.field) ? (f.field === 'statusEngineTemperature' ? 5000 : 10000) : 200, f.field);
     }
     assert.equal(VEHICLE_INTERFACES.length, 13);
     assert.equal(VEHICLE_FIELDS.length, 19);
@@ -157,12 +163,14 @@ describe('allowlist: манифест, флаги, периоды опроса',
       assert.ok((VEHICLE_SIGNAL_IDS as readonly string[]).includes(id), id);
   });
 
-  it('watch получает opts: fieldPollMs по полям (1 с / 5 с / 10 с), onAvailability у всех', async () => {
+  it('watch получает opts: fieldPollMs по полям (200 мс = 5 Гц / 5 с / 10 с), onAvailability у всех', async () => {
     const { tr } = await started();
     const by = (i: string) => tr.subs.find((s) => s.iface === i)!.opts!;
-    assert.deepEqual(by(CDS).fieldPollMs, { statusEngineSpeed2: 1000, statusEngineTemperature: 5000 });
-    assert.equal(by(CDS).pollMs, 1000);
-    assert.deepEqual(by(V2).fieldPollMs, { statusCarSpeed2: 1000 });
+    assert.deepEqual(by(CDS).fieldPollMs, { statusEngineSpeed2: 200, statusEngineTemperature: 5000 });
+    assert.equal(by(CDS).pollMs, 200);
+    assert.deepEqual(by(V2).fieldPollMs, { statusCarSpeed2: 200 });
+    assert.deepEqual(by(FES).fieldPollMs, { statusActualValueTorque2: 200 });
+    assert.deepEqual(by(CDS2).fieldPollMs, { statusLongitudinalAccelerationMassCenter: 200, statusLateralAccelerationMassCenter: 200, statusYawVelocityVehicle: 200 });
     assert.deepEqual(by(TPMS).fieldPollMs, { statusTyrePressure: 10000, statusTyreTemperature: 10000 });
     assert.deepEqual(by(VEH).fieldPollMs, { statusNewCurrentUnitsStatusExt: 10000 });
     for (const i of [VI, STEER, PEDAL, BDS, PT, VM, DSC]) assert.equal(by(i).pollMs, undefined, i);
@@ -346,27 +354,46 @@ describe('руль, рыскание, педаль', () => {
     assert.equal(a.signals(80).steeringWheelAngleDeg.quality, 'invalid', '> 900°');
   });
 
-  it('руль: два поля — детерминированный приоритет; недопустимое/отсутствующее одно не стирает допустимое другое', async () => {
+  it('руль: показанный угол — только из ActualSteeringAngleDriver; NoCRC (кодировка не подтверждена) не подменяет его', async () => {
+    // Прежняя логика: свежий допустимый отсчёт NoCRC «побеждал» недопустимый/устаревший главного — показанный угол
+    // мог переключаться на поле, равнозначность кодировки которого не подтверждена (осторожное исправление; причина
+    // замеченных скачков этим не доказана).
     const { tr, a, at } = await started();
     at(10);
-    tr.feed(STEER, 'ActualSteeringAngleDriver', { actualValueSteeringAngleDriver: 100 });
+    tr.feed(STEER, 'ActualSteeringAngleDriver', { actualValueSteeringAngleDriver: 65536 - 910 }); // −40,0°
     at(20);
-    tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 200 });
-    near(a.signals(30).steeringWheelAngleDeg.value, 100 * 0.04395, 1e-9);
+    tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 65536 - 5506 }); // тем же декодером −242°
+    near(a.signals(30).steeringWheelAngleDeg.value, -910 * 0.04395, 1e-9);
+    // главное поле — свежий недопустимый: недопустимо, а не значение NoCRC
     at(40);
     tr.feed(STEER, 'ActualSteeringAngleDriver', { actualValueSteeringAngleDriver: 65535 });
-    near(a.signals(50).steeringWheelAngleDeg.value, 200 * 0.04395, 1e-9);
-    at(60);
-    tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 65535 });
-    assert.equal(a.signals(70).steeringWheelAngleDeg.quality, 'invalid', 'оба свежие недопустимы');
-    at(80);
-    tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 300 });
-    tr.feed(STEER, 'ActualSteeringAngleDriver', {});
-    near(a.signals(90).steeringWheelAngleDeg.value, 300 * 0.04395, 1e-9);
-    // Главное поле устарело, запасное свежее — берётся запасное.
+    at(45);
+    tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 200 });
+    assert.equal(a.signals(50).steeringWheelAngleDeg.quality, 'invalid');
+    // главное поле замолчало (только уведомления), NoCRC свежий: прежний угол только «устарело», не NoCRC
+    at(100);
+    tr.feed(STEER, 'ActualSteeringAngleDriver', { actualValueSteeringAngleDriver: 1000 });
     at(6000);
     tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 400 });
-    near(a.signals(6000).steeringWheelAngleDeg.value, 400 * 0.04395, 1e-9);
+    const s = a.signals(6000).steeringWheelAngleDeg;
+    assert.equal(s.quality, 'stale');
+    near(s.value, 1000 * 0.04395, 1e-9);
+    // только NoCRC с самого начала — угла нет (честно), но сырое видно в диагностике
+    const b = await started();
+    b.at(10);
+    b.tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 300 });
+    assert.equal(b.a.signals(20).steeringWheelAngleDeg.quality, 'unavailable');
+    assert.equal(b.a.diagnostics(20).latestSamples.find((e) => e.field === 'actualSteeringAngleDriverNoCRC')!.values.actualValueSteeringAngleDriver, 300);
+  });
+
+  it('allowlist: угол руля — только из ActualSteeringAngleDriver (неподтверждённая подмена из NoCRC запрещена)', () => {
+    // Проверка именно руля: квалифицированный выбор источника для других сигналов этим не запрещён.
+    const steer = VEHICLE_FIELDS.filter((f) => f.outputs.some((o) => o.kind === 'number' && o.id === 'steeringWheelAngleDeg')).map((f) => f.field);
+    assert.deepEqual(steer, ['ActualSteeringAngleDriver']);
+    const nocrc = VEHICLE_FIELDS.find((f) => f.field === 'actualSteeringAngleDriverNoCRC')!;
+    assert.deepEqual(nocrc.outputs, [], 'NoCRC — только сырой журнал');
+    assert.deepEqual(nocrc.diag, ['actualValueSteeringAngleDriver']);
+    assert.equal(manifestSignals()[STEER].actualSteeringAngleDriverNoCRC, 's', 'подписка (только чтение) сохранена');
   });
 
   it('рыскание: raw × 0.005 − 163.84 °/с; 65535 — нет значения', async () => {
@@ -380,7 +407,7 @@ describe('руль, рыскание, педаль', () => {
     assert.equal(a.signals(20).yawRateDegS.quality, 'invalid');
   });
 
-  it('педаль: ×0.025 %, 0…4000; это acceleratorPedalPercent, дроссель остаётся без данных', async () => {
+  it('педаль: ×0.025 %, 0…4080 (до 102 %); это acceleratorPedalPercent, дроссель остаётся без данных', async () => {
     const { tr, a, at } = await started();
     at(10);
     tr.feed(PEDAL, 'AngleAcceleratorPedal', { actualValueAngleAcceleratorPedal: 4000 });
@@ -389,7 +416,9 @@ describe('руль, рыскание, педаль', () => {
     assert.equal(s['engine.throttlePercent'].quality, 'unavailable');
     tr.feed(PEDAL, 'AngleAcceleratorPedal', { actualValueAngleAcceleratorPedal: 0 });
     assert.equal(a.signals(20).acceleratorPedalPercent.value, 0);
-    tr.feed(PEDAL, 'AngleAcceleratorPedal', { actualValueAngleAcceleratorPedal: 4001 });
+    tr.feed(PEDAL, 'AngleAcceleratorPedal', { actualValueAngleAcceleratorPedal: 4080 });
+    near(a.signals(20).acceleratorPedalPercent.value, 102);
+    tr.feed(PEDAL, 'AngleAcceleratorPedal', { actualValueAngleAcceleratorPedal: 4081 });
     s = a.signals(20);
     assert.equal(s.acceleratorPedalPercent.quality, 'invalid');
     tr.feed(PEDAL, 'AngleAcceleratorPedal', { actualValueAngleAcceleratorPedal: 65535 });

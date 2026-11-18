@@ -194,11 +194,12 @@ describe('новые поля (upstream live_data / xdrive_live / car_vitals / r
     assert.equal(decodeYawRate(-1), INVALID);
   });
 
-  it('педаль: ×0.025 %, raw 0…4000', () => {
+  it('педаль: ×0.025 %, raw 0…4080 (до 102 %, как upstream)', () => {
     assert.equal(decodePedal(0), 0);
     assert.equal(decodePedal(2000), 50);
     assert.equal(decodePedal(4000), 100);
-    assert.equal(decodePedal(4001), INVALID);
+    assert.equal(decodePedal(4080), 102);
+    assert.equal(decodePedal(4081), INVALID);
     assert.equal(decodePedal(65535), INVALID);
     assert.equal(decodePedal(-1), INVALID);
   });

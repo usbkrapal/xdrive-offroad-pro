@@ -29,7 +29,9 @@ const topS = fit(887, 1774, Math.round(TOPDOWN_H_SYSTEMS * TEX_SCALE));
 // Спрайты в пропорциях PNG, ширина как в AttitudeDial (195 и 164 единиц из 148).
 const pitchW = Math.round(195 * DIAL_K * TEX_SCALE);
 const rollW = Math.round(164 * DIAL_K * TEX_SCALE);
-const camW = Math.round((CAMERA_MAIN.w * TEX_SCALE) / 8) * 8;
+// Демо-снимки камер — только для демо разработчика (XOP_DEV=demo): ширина текстуры прежняя (0.1.1, 792), а не по
+// выросшему кадру передней камеры — пакет не растёт ради демо; на экране кадр слегка растягивается.
+const camW = Math.min(792, Math.round((CAMERA_MAIN.w * TEX_SCALE) / 8) * 8);
 const cam = { w: camW, h: Math.round((camW * 941) / 1672) };
 
 export const ASSETS: readonly AssetSpec[] = [

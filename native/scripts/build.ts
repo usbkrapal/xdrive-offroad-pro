@@ -13,6 +13,13 @@ export const OUT_DIR = join(NATIVE, 'dist', APP_ID);
 /** NOTICE: build.py пакета копирует только файлы с точным именем LICENSE или NOTICE. */
 export const LICENSE_FILE = 'NOTICE';
 export const LICENSE_SRC = join(ROOT, 'licenses', 'IDRIVE7_APPS_MIT.txt');
+/** Схемы записей UDS (native/src/vehicle/uds/records.ts) — по каталогам strulock/m550-analyzer @2a2002b1 (MIT). */
+export const M550_LICENSE_SRC = join(ROOT, 'licenses', 'M550_ANALYZER_MIT.txt');
+export const M550_PREAMBLE =
+  '\n----------------------------------------------------------------------\n\n' +
+  'Diagnostic record layouts (LMV DB32, DSC DBE4/DBE5, VDP DC05/DC06/DC31/D8EC, EPS DB57) are derived from the\n' +
+  'module catalogs of m550-analyzer (https://github.com/strulock/m550-analyzer, commit 2a2002b1da63ed5bdb793ff294d4c2b06493a531).\n' +
+  'The MIT License below applies to those portions only.\n\n';
 /**
  * Ровно эти файлы составляют приложение (build.py упаковывает и каталоги — их быть не должно).
  * icon.png: build.py кладёт его иконкой точки входа вместо make_icon.js (иначе — только буквы iconGlyph).
@@ -32,11 +39,12 @@ export const NOTICE_PREAMBLE =
   '----------------------------------------------------------------------\n' +
   '\n';
 
-/** NOTICE = преамбула + licenses/IDRIVE7_APPS_MIT.txt дословно; без исходника сборка не идёт. */
-export function copyLicense(outDir: string = OUT_DIR, src: string = LICENSE_SRC): string {
+/** NOTICE = преамбула + licenses/IDRIVE7_APPS_MIT.txt + раздел m550-analyzer (MIT) дословно; без исходников сборка не идёт. */
+export function copyLicense(outDir: string = OUT_DIR, src: string = LICENSE_SRC, m550: string = M550_LICENSE_SRC): string {
   if (!existsSync(src)) throw new Error(`${src} is missing: the generated app must carry the idrive7-apps MIT notice`);
+  if (!existsSync(m550)) throw new Error(`${m550} is missing: the generated app must carry the m550-analyzer MIT notice`);
   const dst = join(outDir, LICENSE_FILE);
-  writeAtomic(dst, NOTICE_PREAMBLE + readFileSync(src, 'utf8'));
+  writeAtomic(dst, NOTICE_PREAMBLE + readFileSync(src, 'utf8') + M550_PREAMBLE + readFileSync(m550, 'utf8'));
   return dst;
 }
 

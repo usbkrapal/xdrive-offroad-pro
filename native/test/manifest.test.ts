@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { SCENARIO_IDS } from '../../src/domain/types';
-import { CAMERA_IDS } from '../../src/screens/cameraPresentation';
 import { APP_ID, APP_TITLE, buildManifest, LOGGING_ID, REQUIRES } from '../src/manifest';
 import { nativeRu } from '../src/strings';
 import { VehicleAdapter } from '../src/vehicle/adapter';
 import { VEHICLE_FIELDS, VEHICLE_INTERFACES } from '../src/vehicle/allowlist';
-import { APP_FILES, copyLicense, LICENSE_FILE, LICENSE_SRC, NOTICE_PREAMBLE } from '../scripts/build';
+import { TASU_IFACE } from '../src/vehicle/uds/tasu';
+import { ICAM2, XVIEW } from '../src/camera/request';
+import { APP_FILES, copyLicense, LICENSE_FILE, LICENSE_SRC, M550_LICENSE_SRC, M550_PREAMBLE, NOTICE_PREAMBLE } from '../scripts/build';
 import { MARKER, stage } from '../scripts/stage';
 import { FakeTransport, flush, hasUpstream, loadUpstream, loadUpstreamDisplay, ROOT } from './helpers';
 
@@ -25,7 +26,7 @@ type Spec = {
   autostart?: unknown;
   signals: Record<string, Record<string, unknown>>;
   screens: { name: string; kind: string; buttons: [string, string][] }[];
-  settings: { key: string; default: unknown; options: [string, string][] }[];
+  settings: { key: string; default: unknown; hidden?: boolean; options: [string, string][] }[];
 };
 
 describe('app.json', () => {
@@ -40,13 +41,19 @@ describe('app.json', () => {
     assert.equal(m.loggingId, LOGGING_ID);
     assert.match(m.loggingId, /^[A-Z0-9]{4}$/);
     assert.deepEqual(m.mguHmi, ['ID7']);
-    assert.deepEqual(m.requires, { 'mgu-render': '0.6.21' });
+    assert.deepEqual(m.requires, { 'mgu-render': '0.6.21', 'mgu-deploy': '0.8.19', 'xop-camera-bridge': '0.1.2' });
     assert.deepEqual(m.requires, { ...REQUIRES });
     assert.doesNotMatch(JSON.stringify(m), /idrive7-renderd|2\.1\.15/, 'старый рендерер нигде не упомянут');
-    assert.equal((m as unknown as { version: string }).version, '0.1.1');
+    assert.equal((m as unknown as { version: string }).version, '0.1.2');
     assert.equal((m as unknown as { screens: { title: string }[] }).screens[0].title, APP_TITLE, 'заголовок экрана = имя приложения');
     assert.equal(nativeRu.app.title, APP_TITLE);
     assert.equal(m.autostart, undefined);
+  });
+
+  it('мост камер: версия зависимости = версии его component.json; мост требует свой приёмник той же версии', () => {
+    const b = JSON.parse(readFileSync(join(ROOT, 'native/packaging/xop-camera-bridge/component.json'), 'utf8')) as { id: string; version: string; catalog: { requires: Record<string, string> } };
+    assert.equal((m.requires as Record<string, string>)[b.id], b.version);
+    assert.equal(b.catalog.requires['xop-camrx'], b.version);
   });
 
   it('зависимость совпадает с официальным component.json mgu-render 0.6.21', { skip: existsSync(RENDER_COMPONENT) ? false : `нет ${RENDER_COMPONENT}` }, () => {
@@ -54,12 +61,25 @@ describe('app.json', () => {
     assert.equal(c.id, 'mgu-render');
     assert.equal(c.version, '0.6.21');
     assert.equal(c.mguProvides, 'renderer');
-    assert.deepEqual(m.requires, { [c.id]: c.version });
+    assert.equal((m.requires as Record<string, string>)[c.id], c.version);
   });
 
-  it('signals: только чтение/подписка, без w, _methods, _broadcasts, _instances', () => {
+  it('signals: SOME/IP — только чтение/подписка; единственный транспорт с методом — InternalTasu (sendTasuRequest)', () => {
     for (const [iface, fields] of Object.entries(m.signals)) {
       assert.equal(typeof fields._optional, 'string', `${iface}: _optional`);
+      if (iface === TASU_IFACE) {
+        assert.deepEqual(Object.keys(fields).sort(), ['_broadcasts', '_instances', '_methods', '_optional']);
+        assert.deepEqual(fields._methods, ['sendTasuRequest']);
+        assert.deepEqual(fields._broadcasts, ['sendTasuResponse']);
+        continue;
+      }
+      if (iface === ICAM2) {
+        // камеры: свой cookie и обычный вид (Drive Recorder-путь); без записи полей
+        assert.deepEqual(Object.keys(fields).sort(), ['_methods', '_optional', 'currentState']);
+        assert.deepEqual(fields._methods, ['changeState', 'clientAttach', 'clientDetach']);
+        assert.equal(fields.currentState, 'rs');
+        continue;
+      }
       for (const [k, v] of Object.entries(fields)) {
         assert.ok(!['_methods', '_broadcasts', '_instances'].includes(k), `${iface}.${k}`);
         if (k.startsWith('_')) continue;
@@ -67,16 +87,19 @@ describe('app.json', () => {
         assert.ok(!String(v).includes('w'), `${iface}.${k} не пишется`);
       }
     }
-    assert.ok(!Object.keys(m.signals).some((i) => /tasu|diag|uds/i.test(i)), 'нет диагностических транспортов');
+    assert.deepEqual(Object.keys(m.signals).filter((i) => /tasu|diag|uds/i.test(i)), [TASU_IFACE], 'один диагностический транспорт');
+    assert.deepEqual(Object.keys(m.signals).filter((i) => (m.signals[i] as Record<string, unknown>)._methods !== undefined).sort(), [ICAM2, TASU_IFACE].sort());
+    assert.deepEqual(m.signals[XVIEW], { _optional: (m.signals[XVIEW] as Record<string, unknown>)._optional, CurrentState: 'rs' });
   });
 
   it('signals совпадает с allowlist и с тем, на что адаптер реально подписывается', async () => {
     const fromList: Record<string, string[]> = {};
     for (const f of VEHICLE_FIELDS) (fromList[f.iface] ??= []).push(f.field);
     const fromManifest: Record<string, string[]> = {};
-    for (const [iface, fields] of Object.entries(m.signals)) fromManifest[iface] = Object.keys(fields).filter((k) => !k.startsWith('_'));
+    const own = [TASU_IFACE, ICAM2, XVIEW]; // транспорт UDS и камеры — не поля адаптера
+    for (const [iface, fields] of Object.entries(m.signals)) if (own.indexOf(iface) < 0) fromManifest[iface] = Object.keys(fields).filter((k) => !k.startsWith('_'));
     assert.deepEqual(sorted(fromManifest), sorted(fromList));
-    assert.deepEqual(Object.keys(m.signals).sort(), VEHICLE_INTERFACES.map((i) => i.iface).sort());
+    assert.deepEqual(Object.keys(m.signals).filter((i) => own.indexOf(i) < 0).sort(), VEHICLE_INTERFACES.map((i) => i.iface).sort());
 
     const tr = new FakeTransport();
     const a = new VehicleAdapter(tr.watch, () => 0);
@@ -88,12 +111,11 @@ describe('app.json', () => {
     await a.stop();
   });
 
-  it('экран и кнопки: один canvas-экран MAIN, пять кнопок HMI (с отдельной «Сброс» — новая сессия)', () => {
+  it('экран и кнопки: один canvas-экран MAIN, только листание (без «Настроек», демо и сессии)', () => {
     assert.equal(m.screens.length, 1);
     assert.equal(m.screens[0].kind, 'canvas');
     assert.equal(m.screens[0].name, 'MAIN');
-    assert.equal(m.screens[0].buttons.length, 5);
-    assert.deepEqual(m.screens[0].buttons.map((b) => b[0]), ['BTN_PAGE', 'BTN_PREV', 'BTN_ACTION', 'BTN_SESSION', 'BTN_SETTINGS']);
+    assert.deepEqual(m.screens[0].buttons.map((b) => b[0]), ['BTN_PAGE', 'BTN_PREV'], 'без BTN_SETTINGS у kit нет вкладки «Настройки»');
     assert.ok(!('chrome' in m.screens[0]), 'kit-рамка (вкладки, панель) остаётся');
   });
 
@@ -101,7 +123,7 @@ describe('app.json', () => {
   // + 180 px; шире 1920 — HMI прокручивает панель. Все подписи, включая сменные (Пауза/Пуск), — без прокрутки.
   const barSets = (): string[][] => {
     const b = nativeRu.bar;
-    return [b.pause, b.resume].map((action) => [b.next, b.prev, action, b.session, b.settings]);
+    return [[b.next, b.prev]];
   };
 
   it('подписи панели помещаются без прокрутки (консервативная оценка 30 px HMI на символ)', () => {
@@ -110,7 +132,7 @@ describe('app.json', () => {
       const total = 132 + labels.reduce((s, l) => s + l.length * 30 + 180, 0);
       assert.ok(total <= 1920, `${labels.join(' | ')}: ${total} px > 1920`);
     }
-    assert.deepEqual(m.screens[0].buttons.map((b) => b[1]), [nativeRu.bar.next, nativeRu.bar.prev, nativeRu.bar.pause, nativeRu.bar.session, nativeRu.bar.settings]);
+    assert.deepEqual(m.screens[0].buttons.map((b) => b[1]), [nativeRu.bar.next, nativeRu.bar.prev]);
   });
 
   it('подписи панели помещаются по модели kit (display.js HMI7, Recorder.textWidth), если есть кириллический атлас', { skip: hasUpstream ? false : 'нет checkout idrive7-apps' }, (t) => {
@@ -127,21 +149,15 @@ describe('app.json', () => {
     }
   });
 
-  it('настройка primaryCamera: передняя/левая/правая, по умолчанию передняя', () => {
-    const cam = m.settings.find((s) => s.key === 'primaryCamera')!;
-    assert.ok(cam, 'есть настройка основной камеры');
-    assert.equal(cam.default, 'front');
-    assert.deepEqual(cam.options.map((o) => o[0]), [...CAMERA_IDS]);
-    assert.deepEqual(CAMERA_IDS, ['front', 'left', 'right']);
-    for (const o of cam.options) assert.ok(o[1].length > 0);
-  });
-
-  it('настройки: источник данных по умолчанию — демо; пять сценариев', () => {
+  it('настройки: все скрыты (интерфейса настроек нет); источник по умолчанию — автомобиль; без основной камеры', () => {
+    assert.ok(m.settings.length > 0);
+    for (const st of m.settings) assert.equal(st.hidden, true, `${st.key} скрыта`);
     const src = m.settings.find((s) => s.key === 'dataSource')!;
-    assert.equal(src.default, 'demo');
+    assert.equal(src.default, 'vehicle');
     assert.deepEqual(src.options.map((o) => o[0]), ['demo', 'vehicle']);
     const sc = m.settings.find((s) => s.key === 'scenario')!;
     assert.deepEqual(sc.options.map((o) => o[0]), [...SCENARIO_IDS]);
+    assert.ok(!m.settings.some((s) => s.key === 'primaryCamera'), 'раскладка камер фиксирована');
     assert.ok(!m.settings.some((s) => s.key === 'demo'), 'нет настройки авто-демо upstream');
   });
 });
@@ -162,7 +178,8 @@ describe('каталог приложения: файлы и MIT-уведомл�
       const dst = copyLicense(dir);
       assert.equal(dst, join(dir, LICENSE_FILE));
       const notice = readFileSync(dst, 'utf8');
-      assert.equal(notice, NOTICE_PREAMBLE + src, 'полный MIT-текст после преамбулы');
+      assert.equal(notice, NOTICE_PREAMBLE + src + M550_PREAMBLE + readFileSync(M550_LICENSE_SRC, 'utf8'), 'оба полных MIT-текста');
+      assert.match(notice, /Copyright \(c\) 2026 strulock/);
       assert.match(NOTICE_PREAMBLE, /portions/);
       assert.match(NOTICE_PREAMBLE, /No license has been selected/);
       assert.deepEqual(readdirSync(dir).sort(), [LICENSE_FILE, 'keep.txt'], 'другие файлы не тронуты, временных нет');

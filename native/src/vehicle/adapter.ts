@@ -15,12 +15,23 @@ import { buildSignal } from '../../../src/domain/signal';
 import { SIGNAL_IDS } from '../../../src/domain/signalCatalog';
 import { WHEELS, type Gear, type RuntimeSource, type Signal, type SignalId, type SignalMap, type SignalValueMap } from '../../../src/domain/types';
 import type { FieldHandler, Log, WatchResult } from '../platform/kitTypes';
-import { VEHICLE_FIELDS, VEHICLE_INTERFACES, SIGNAL_IFACE, type FieldOutput, type FieldSpec } from './allowlist';
+import { VEHICLE_FIELDS, VEHICLE_INTERFACES, VEHICLE_SIGNAL_IDS, SIGNAL_IFACE, type FieldOutput, type FieldSpec } from './allowlist';
 import { GearboxOilGate, readTorqueSplit } from './bds';
 import { INVALID } from './decode';
 import { DiagLog, type DiagEntry } from './diag';
 import { fuseGear, readGearbox, readSelection, type FusedGear, type TimedReading } from './gear';
 import { TyreState, tyreSignalId } from './tpms';
+import { EXTRA_IDS, type ExtraId } from './uds/ecus';
+import type { UdsOutput } from './uds/reader';
+
+/** Сигнал величины вне домена (давление контуров, датчик высоты, шестерня EPS, уровень EHC). */
+export interface ExtraSignal {
+  readonly value: number | null;
+  readonly quality: 'valid' | 'stale' | 'unavailable' | 'invalid';
+  readonly updatedAt: number | null;
+}
+/** Приоритет диагностического (UDS) источника: SOME/IP-источник того же сигнала главнее. */
+const UDS_PRIORITY = 1;
 
 /**
  * Пятый аргумент ctx.signals.watch (vendor kit/runtime/signals.js). Необязателен: со старым
@@ -73,6 +84,8 @@ interface Sample {
   readonly priority: number;
   readonly source: RuntimeSource;
   readonly iface: string;
+  /** Поле-источник (для диагностики: из какого поля показанное значение). */
+  readonly field: string;
   /** Другие интерфейсы, от которых зависит значение (шины — от единиц Vehicle): их потеря тоже обесценивает. */
   readonly deps?: readonly string[];
   readonly reason: string | null;
@@ -90,9 +103,14 @@ interface Sub {
   wasAvailable: boolean;
 }
 
+/** Сколько последних интервалов между отсчётами поля хранится (медиана/максимум в диагностике). */
+const INTERVALS_MAX = 32;
+
 interface FieldStats {
   samples: number;
   lastAt: number | null;
+  /** Последние интервалы между отсчётами, мс (кольцо INTERVALS_MAX): частота уведомлений автомобиля. */
+  intervals: number[];
   /** Колбэки, пришедшие, пока провайдер интерфейса недоступен (не отсчёты). */
   dropped: number;
 }
@@ -128,18 +146,35 @@ export interface FieldDiagnostics {
   readonly lastSampleAt: number | null;
   /** Колбэки без провайдера, отброшенные адаптером. */
   readonly droppedWhileUnavailable: number;
+  /** Интервал между последними отсчётами поля, мс: медиана и максимум (null — меньше двух отсчётов). */
+  readonly intervalMs: { readonly median: number; readonly max: number; readonly n: number } | null;
   /** Только у полей с геттером и только с пропатченным рантаймом; иначе null. */
   readonly getter: GetterStats | null;
 }
 
-/** Снимок для экрана «Настройки» (INTEGRATION.md): только известные поля, ограниченный объём. */
+/**
+ * Масло КПП в диагностике: показывается; ждём изменения сырого (отсчёты BasicDataSet есть); провайдер BasicDataSet
+ * доступен, но отсчётов нет; провайдер недоступен; подписки нет. «Ждём изменения» — только когда отсчёты есть.
+ */
+export type GearboxOilState = 'shown' | 'waitingChange' | 'noSamples' | 'providerUnavailable' | 'notSubscribed';
+
+/** Снимок для листа диагностики (INTEGRATION.md): только известные поля, ограниченный объём. */
 export interface VehicleDiagnostics {
   readonly at: number;
   readonly interfaces: readonly InterfaceDiagnostics[];
-  /** Почему сигнал сейчас без значения (ждём единиц, ждём изменения масла КПП, квалификатор …). */
+  /**
+   * Почему сигнал сейчас без значения (ждём единиц, ждём изменения масла КПП, квалификатор …); у сигналов без
+   * своей причины — состояние интерфейса-источника (нет подписки / провайдер недоступен / отсчётов не было).
+   */
   readonly reasons: Readonly<Partial<Record<SignalId, string>>>;
+  /** Поле, из которого взято показанное значение (valid или stale), — по сигналам. */
+  readonly sources: Readonly<Partial<Record<SignalId, string>>>;
   readonly tyreUnits: { readonly pressure: string; readonly temperature: string };
   readonly gearboxOilPromoted: boolean;
+  readonly gearboxOil: GearboxOilState;
+  /** Последний отсчёт каждого поля с известными членами; at — время получения (часы адаптера). */
+  readonly latestSamples: readonly DiagEntry[];
+  /** История: первый отсчёт каждого поля с начала чтения. */
   readonly firstSamples: readonly DiagEntry[];
   readonly changes: readonly DiagEntry[];
 }
@@ -149,11 +184,44 @@ const GEAR_IFACE = SIGNAL_IFACE.get('gear') ?? '';
 const TYRE_IDS = new Set<SignalId>(WHEELS.reduce<SignalId[]>((a, w) => a.concat(tyreSignalId('pressure', w), tyreSignalId('temperature', w)), []));
 /** Интерфейс единиц автомобиля и интерфейс масла КПП — по выходам allowlist. */
 const UNITS_IFACE = VEHICLE_FIELDS.find((f) => f.outputs.some((o) => o.kind === 'units'))?.iface ?? '';
-const GEARBOX_OIL_IFACE = VEHICLE_FIELDS.find((f) => f.outputs.some((o) => o.kind === 'gearboxOil'))?.iface ?? '';
+const GEARBOX_OIL_SPEC = VEHICLE_FIELDS.find((f) => f.outputs.some((o) => o.kind === 'gearboxOil'));
+const GEARBOX_OIL_IFACE = GEARBOX_OIL_SPEC?.iface ?? '';
+const GEARBOX_OIL_FIELD = GEARBOX_OIL_SPEC?.field ?? '';
 const TPMS_FIELDS = VEHICLE_FIELDS.reduce<Partial<Record<'tyrePressure' | 'tyreTemperature', FieldSpec>>>((acc, f) => {
   for (const o of f.outputs) if (o.kind === 'tyrePressure' || o.kind === 'tyreTemperature') acc[o.kind] = f;
   return acc;
 }, {});
+
+/** Состояние интерфейса-источника — причина «нет данных» у сигнала без своей причины. */
+function ifaceState(i: InterfaceDiagnostics): string {
+  if (!i.subscribed) return i.error ? 'нет подписки на интерфейс' : 'подписка ещё не установлена';
+  if (!i.available) return i.samples > 0 ? 'провайдер интерфейса сейчас недоступен' : 'провайдер интерфейса недоступен, отсчётов не было';
+  return i.samples > 0 ? 'нет пригодного отсчёта' : 'провайдер доступен, отсчётов не было';
+}
+
+const shortIface = (s: string) => s.replace(/^de\.bmw\.(infotainment\.|infrastructure\.|powertrain\.|chassis\.)?/, '');
+const clipLog = (s: string) => (s.length > 240 ? `${s.slice(0, 239)}…` : s);
+
+/**
+ * Сводка для журнала (раз в несколько минут, см. model): интервалы уведомлений полей, источник руля и последние сырые
+ * значения обоих полей руля с возрастом. Ограничена по длине; идентификаторов (VIN и т. п.) в ней нет — их нет в снимке.
+ */
+export function logSummary(d: VehicleDiagnostics): string[] {
+  const iv: string[] = [];
+  for (const i of d.interfaces) for (const f of i.fields) if (f.intervalMs) iv.push(`${f.field}=${Math.round(f.intervalMs.median)}/${Math.round(f.intervalMs.max)}ms`);
+  const steer = d.latestSamples
+    .filter((e) => /SteeringAngle/.test(e.iface))
+    .map((e) => `${e.field}=${JSON.stringify(e.values)}@${Math.round((d.at - e.at) / 100) / 10}s`);
+  return [
+    clipLog(`signal intervals (median/max): ${iv.join(' ') || 'none'}`),
+    clipLog(`steering source ${d.sources.steeringWheelAngleDeg ?? 'none'}; latest raw ${steer.join(' ') || 'none'}`),
+  ];
+}
+
+function intervalSummary(v: readonly number[]): { median: number; max: number; n: number } {
+  const s = v.slice().sort((a, b) => a - b);
+  return { median: s[Math.floor(s.length / 2)], max: s[s.length - 1], n: s.length };
+}
 
 const count = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? Math.floor(x) : 0);
 const time = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
@@ -174,6 +242,19 @@ function getterStats(r: Partial<GetterStats> | undefined): GetterStats | null {
   };
 }
 
+/** Имена и типы членов значения поля (до 16, имена ≤ 40 символов) — без самих значений. */
+export function memberShape(v: unknown): string {
+  if (v === null || typeof v !== 'object') return typeof v;
+  if (Array.isArray(v)) return `array[${v.length}]`;
+  const keys = Object.keys(v as Record<string, unknown>);
+  const parts = keys.slice(0, 16).map((k) => {
+    const x = (v as Record<string, unknown>)[k];
+    const t = x === null ? 'null' : Array.isArray(x) ? `array[${x.length}]` : typeof x === 'number' ? (Number.isInteger(x) ? 'int' : 'number') : typeof x;
+    return `${k.replace(/[^\w.]/g, '?').slice(0, 40)}:${t}`;
+  });
+  return `{${parts.join(', ')}${keys.length > 16 ? `, …+${keys.length - 16}` : ''}}`;
+}
+
 export class VehicleAdapter {
   private gen = 0;
   private active = false;
@@ -182,6 +263,7 @@ export class VehicleAdapter {
   private errors: string[] = [];
   /** id → источник (поле) → последний отсчёт. */
   private samples = new Map<SignalId, Map<string, Sample>>();
+  private extraSamples = new Map<ExtraId, Sample>();
   private gearbox: GearSample | null = null;
   private selection: GearSample | null = null;
   private tyres = new TyreState();
@@ -196,6 +278,8 @@ export class VehicleAdapter {
   private down = new Set<string>();
   private stats = new Map<string, FieldStats>();
   private lastSignals: SignalMap | null = null;
+  /** Растёт с каждым принятым отсчётом и потерей провайдера: модель пересобирает снимок сразу, а не по таймеру. */
+  private rev = 0;
 
   constructor(
     private readonly watch: TelemetryWatchFn,
@@ -266,6 +350,7 @@ export class VehicleAdapter {
     this.subs = [];
     this.errors = [];
     this.samples.clear();
+    this.extraSamples.clear();
     this.gearbox = null;
     this.selection = null;
     this.tyres = new TyreState();
@@ -284,10 +369,47 @@ export class VehicleAdapter {
     return this.active;
   }
 
+  /**
+   * Отсчёт диагностического чтения (vehicle/uds): доменный сигнал — в общее хранилище с приоритетом ниже SOME/IP,
+   * величина вне домена — в extras. Время — часы адаптера в момент приёма.
+   */
+  putUds(o: UdsOutput): void {
+    if (!this.active) return;
+    const at = this.now();
+    const seq = ++this.seq;
+    this.rev++;
+    const s: Sample = { value: o.value, absent: o.absent, at, seq, staleMs: o.staleMs, priority: UDS_PRIORITY, source: 'measured', iface: 'uds', field: o.field, reason: o.reason };
+    if (o.target.kind === 'extra') this.extraSamples.set(o.target.id, s);
+    else {
+      const m = this.samples.get(o.target.id) ?? new Map<string, Sample>();
+      m.set(o.field, s);
+      this.samples.set(o.target.id, m);
+    }
+  }
+
+  /** Величины вне домена: свежие допустимые — valid, старые — stale, отсутствие/недопустимое — без значения. */
+  extras(nowMs: number = this.now(), reasons?: Record<string, string>): Record<ExtraId, ExtraSignal> {
+    const out = {} as Record<ExtraId, ExtraSignal>;
+    for (const id of EXTRA_IDS) {
+      const s = this.extraSamples.get(id);
+      if (s && s.reason && reasons) reasons[id] = s.reason;
+      if (!s) out[id] = { value: null, quality: 'unavailable', updatedAt: null };
+      else if (s.absent) out[id] = { value: null, quality: 'unavailable', updatedAt: null };
+      else if (s.value === null) out[id] = { value: null, quality: 'invalid', updatedAt: s.at };
+      else out[id] = { value: s.value, quality: nowMs - s.at <= s.staleMs ? 'valid' : 'stale', updatedAt: s.at };
+    }
+    return out;
+  }
+
+  /** Номер изменения данных адаптера (новый отсчёт, потеря провайдера). */
+  get revision(): number {
+    return this.rev;
+  }
+
   private receive(gen: number, f: FieldSpec, v: unknown): void {
     if (gen !== this.gen || !this.active) return;
     const key = `${f.iface}|${f.field}`;
-    const st = this.stats.get(key) ?? { samples: 0, lastAt: null, dropped: 0 };
+    const st = this.stats.get(key) ?? { samples: 0, lastAt: null, intervals: [], dropped: 0 };
     this.stats.set(key, st);
     // Провайдер известно недоступен: колбэк не отсчёт (иначе он пережил бы потерю).
     const sub = this.subs.find((x) => x.iface === f.iface);
@@ -298,8 +420,19 @@ export class VehicleAdapter {
     const at = this.now();
     const seq = ++this.seq;
     st.samples++;
+    if (st.lastAt !== null) {
+      st.intervals.push(at - st.lastAt);
+      if (st.intervals.length > INTERVALS_MAX) st.intervals.shift();
+    }
     st.lastAt = at;
-    this.diag.record(f.iface, f.field, f.diag, v, at, !!f.diagChanges);
+    this.rev++;
+    const raw = this.diag.record(f.iface, f.field, f.diag, v, at, !!f.diagChanges);
+    // Журнал приложения (обычный режим): первый отсчёт каждого поля с известными членами — один раз за подписку
+    if (st.samples === 1 && this.log) {
+      this.log.info(clipLog(`signal ${shortIface(f.iface)}.${f.field}: first sample ${raw ? JSON.stringify(raw) : '(no known members)'}`));
+      // состав поля (имена и типы членов, без значений): есть ли квалификатор/счётчик/CRC рядом со значением
+      this.log.info(clipLog(`signal ${shortIface(f.iface)}.${f.field}: members ${memberShape(v)}`));
+    }
     for (const o of f.outputs) {
       try {
         this.apply(f, o, v, at, seq);
@@ -310,9 +443,9 @@ export class VehicleAdapter {
     }
   }
 
-  private put(id: SignalId, src: string, s: Omit<Sample, 'priority' | 'source' | 'reason'> & Partial<Pick<Sample, 'priority' | 'source' | 'reason'>>): void {
+  private put(id: SignalId, src: string, s: Omit<Sample, 'priority' | 'source' | 'reason' | 'field'> & Partial<Pick<Sample, 'priority' | 'source' | 'reason'>>): void {
     const m = this.samples.get(id) ?? new Map<string, Sample>();
-    m.set(src, { priority: 0, source: 'measured', reason: null, ...s });
+    m.set(src, { priority: 0, source: 'measured', reason: null, ...s, field: src });
     this.samples.set(id, m);
   }
 
@@ -369,6 +502,8 @@ export class VehicleAdapter {
   }
 
   private markLoss(iface: string, count = true): void {
+    this.rev++;
+    if (count && this.log) this.log.warn(`signal ${shortIface(iface)}: provider lost (${(this.lossCount.get(iface) ?? 0) + 1})`);
     this.lossSeq.set(iface, this.seq);
     if (count) this.lossCount.set(iface, (this.lossCount.get(iface) ?? 0) + 1);
     // Единицы, известные до потери, больше не верны (в машине их могли сменить); шины ждут свежих единиц и отсчётов.
@@ -411,13 +546,13 @@ export class VehicleAdapter {
       const f = TPMS_FIELDS[kind === 'pressure' ? 'tyrePressure' : 'tyreTemperature'];
       const o = f?.outputs[0];
       if (!t || !f || !o || o.kind === 'units' || !('staleMs' in o)) return [];
-      return [{ ...t, staleMs: o.staleMs, priority: 0, source: 'measured', iface: f.iface, deps: [UNITS_IFACE] }];
+      return [{ ...t, staleMs: o.staleMs, priority: 0, source: 'measured', iface: f.iface, field: f.field, deps: [UNITS_IFACE] }];
     }
     const m = this.samples.get(id);
     return m ? Array.from(m.values()) : [];
   }
 
-  private numericSignal(id: SignalId, nowMs: number, reasons: Partial<Record<SignalId, string>>): Signal<unknown> {
+  private numericSignal(id: SignalId, nowMs: number, reasons: Partial<Record<SignalId, string>>, sources: Partial<Record<SignalId, string>>): Signal<unknown> {
     const all = this.samplesOf(id);
     const live = all.filter((s) => !this.sampleVoided(s));
     const fresh = live.filter((s) => nowMs - s.at <= s.staleMs);
@@ -426,6 +561,7 @@ export class VehicleAdapter {
     const build = (s: Sample, raw: number) => buildSignal(id, raw as SignalValueMap[typeof id], s.at, s.at, s.source);
     if (valid.length) {
       if (valid[0].reason) reasons[id] = valid[0].reason;
+      sources[id] = valid[0].field;
       return build(valid[0], valid[0].value as number);
     }
     // Свежий «нет значения»/недопустимый отсчёт стирает прежнее измерение (не показывается как stale).
@@ -443,6 +579,7 @@ export class VehicleAdapter {
         : this.voided(old.iface, old.seq)
           ? 'провайдер пропадал — ждём нового отсчёта'
           : 'провайдер единиц пропадал — ждём новых единиц и нового отсчёта';
+      sources[id] = old.field;
       return { ...build(old, old.value as number), quality: 'stale' };
     }
     const any = all.sort(newest)[0];
@@ -452,13 +589,13 @@ export class VehicleAdapter {
 
   /** Полная карта сигналов на момент nowMs. Неподдержанные — unavailable, без значений. */
   signals(nowMs: number = this.now()): SignalMap {
-    return this.compute(nowMs, {});
+    return this.compute(nowMs, {}, {});
   }
 
-  private compute(nowMs: number, reasons: Partial<Record<SignalId, string>>): SignalMap {
+  private compute(nowMs: number, reasons: Partial<Record<SignalId, string>>, sources: Partial<Record<SignalId, string>>): SignalMap {
     this.detectLosses();
     const out: Partial<Record<SignalId, Signal<unknown>>> = {};
-    for (const id of SIGNAL_IDS) out[id] = id === 'gear' ? this.gearSignal(nowMs) : this.numericSignal(id, nowMs, reasons);
+    for (const id of SIGNAL_IDS) out[id] = id === 'gear' ? this.gearSignal(nowMs) : this.numericSignal(id, nowMs, reasons, sources);
     this.lastSignals = out as SignalMap;
     return this.lastSignals;
   }
@@ -504,7 +641,8 @@ export class VehicleAdapter {
   /** Диагностический снимок (не на каждый кадр: собирается по запросу экрана настроек). */
   diagnostics(nowMs: number = this.now()): VehicleDiagnostics {
     const reasons: Partial<Record<SignalId, string>> = {};
-    this.compute(nowMs, reasons);
+    const sources: Partial<Record<SignalId, string>> = {};
+    const sig = this.compute(nowMs, reasons, sources);
     const interfaces = VEHICLE_INTERFACES.map((spec): InterfaceDiagnostics => {
       const sub = this.subs.find((s) => s.iface === spec.iface);
       const err = this.errors.find((e) => e.startsWith(`${spec.iface}: `));
@@ -515,6 +653,7 @@ export class VehicleAdapter {
           samples: st ? st.samples : 0,
           lastSampleAt: st ? st.lastAt : null,
           droppedWhileUnavailable: st ? st.dropped : 0,
+          intervalMs: st && st.intervals.length ? intervalSummary(st.intervals) : null,
           getter: f.flags === 'rs' && sub ? getterStats(sub.res.reads?.[f.field]) : null,
         };
       });
@@ -531,12 +670,33 @@ export class VehicleAdapter {
         fields,
       };
     });
+    // Сигнал без значения и без своей причины: состояние интерфейса-источника (нет подписки / провайдер недоступен /
+    // отсчётов не было) — чтобы «нет данных» не путалось с «ждём изменения».
+    for (const id of VEHICLE_SIGNAL_IDS) {
+      if (reasons[id] || sig[id].quality !== 'unavailable') continue;
+      const i = interfaces.find((x) => x.iface === SIGNAL_IFACE.get(id));
+      if (i) reasons[id] = ifaceState(i);
+    }
+    const bds = interfaces.find((i) => i.iface === GEARBOX_OIL_IFACE);
+    const bdsField = bds && bds.fields.find((f) => f.field === GEARBOX_OIL_FIELD);
+    const gearboxOil: GearboxOilState = this.gearboxOil.isPromoted
+      ? 'shown'
+      : !bds || !bds.subscribed
+        ? 'notSubscribed'
+        : !bds.available
+          ? 'providerUnavailable'
+          : bdsField && bdsField.samples > 0
+            ? 'waitingChange'
+            : 'noSamples';
     return {
       at: nowMs,
       interfaces,
       reasons,
+      sources,
       tyreUnits: this.tyres.unitsSummary(),
       gearboxOilPromoted: this.gearboxOil.isPromoted,
+      gearboxOil,
+      latestSamples: this.diag.latestSamples(),
       firstSamples: this.diag.firstSamples(),
       changes: this.diag.changes(),
     };

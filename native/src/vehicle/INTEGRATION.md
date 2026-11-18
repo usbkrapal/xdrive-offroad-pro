@@ -93,7 +93,7 @@
 ## Поведение
 
 ### Опрос и свежесть
-- Опрос только у полей с геттером (`rs` в upstream): скорость, обороты, момент, ускорения, рыскание — 1 с;
+- Опрос только у полей с геттером (`rs` в upstream): скорость, обороты, момент, ускорения, рыскание — 200 мс (5 Гц, с 0.1.2; было 1 с);
   температуры двигателя — 5 с; TPMS и единицы — 10 с (как `pollMs: 10000` у car_vitals/live_data).
   `s`-поля (руль, педаль, BasicDataSet, передача, диагностические) не опрашиваются: геттера нет.
 - Успешное чтение = новый отсчёт (стоящий автомобиль: скорость 0 остаётся `valid`). Неудачное чтение обработчик
@@ -101,7 +101,7 @@
 - Пороги «устарело»: быстрые 5 с, температуры 60 с, распределение 10 с (car_vitals `SPLIT_STALE`), TPMS 10 мин
   (Redline `STALE_MS`).
 - Для старого рантайма без `fieldPollMs` передаётся и `pollMs` = минимальный период интерфейса (все геттеры CDS
-  тогда читаются раз в 1 с) — допустимо.
+  тогда читаются раз в 200 мс) — допустимо.
 
 ### Потеря провайдера
 - Колбэк `onAvailability(false)`, рост `res.losses` или `res.available === false` в кадре → все отсчёты интерфейса
@@ -122,7 +122,7 @@
 ### Новые поля
 | Сигнал | Источник | Декодирование |
 |---|---|---|
-| `steeringWheelAngleDeg` | `de.bmw.chassis.SteeringAngle` `ActualSteeringAngleDriver` (приоритет 0), `actualSteeringAngleDriverNoCRC` (1), член `actualValueSteeringAngleDriver` | int16 (uint16 в доп. коде принимается) × 0.04395°; 65535 (и −1) — нет; \|угол\| > 900 — нет. Свежий допустимый любого источника побеждает недопустимый/отсутствующий другого; при двух допустимых — приоритет. |
+| `steeringWheelAngleDeg` | `de.bmw.chassis.SteeringAngle` `ActualSteeringAngleDriver`, член `actualValueSteeringAngleDriver`. С 0.1.2 `actualSteeringAngleDriverNoCRC` — только сырой журнал (`outputs: []`): прежний код мог подменять им главное поле, а равнозначность кодировки на G07 не подтверждена (осторожное отключение подмены, не доказанная причина скачков) | int16 (uint16 в доп. коде принимается) × 0.04395°; 65535 (и −1) — нет; \|угол\| > 900 — нет. Источник один, на другое поле не переключается. |
 | `yawRateDegS` | `CDS2.statusYawVelocityVehicle.yawVelocityVehicle` | uint16 × 0.005 − 163.84 °/с; 65535 — нет |
 | `acceleratorPedalPercent` | `de.bmw.powertrain.AcceleratorPedal.AngleAcceleratorPedal.actualValueAngleAcceleratorPedal` | × 0.025 %, raw 0…4000, прочее — нет |
 | `xdrive.rearPercent` / `xdrive.frontPercent` | `de.bmw.infrastructure.analytics.BasicDataSet.basicDataSet.valueDistributionLongitudinalTorqueRearAxisFrontAxis` | × 0.01 % задней; передняя = 100 − задняя (`estimated`). Квалификатор `qualifierValue…` ∈ {2, 10, `SIGNALWERT_IST_GUELTIG`, `SIGNALWERT_IST_GUELTIG__REKALIBRIERUNGSBEDARF`} или отсутствует (upstream допускает; пометка в `reasons`). raw 0 / 65535 — не заполнено (`unavailable`, стирает прежнее), > 10000 — `invalid`. |
@@ -141,7 +141,14 @@
 Абсолютные тангаж/крен, высота, подвеска (уровень/высоты), HDC/DSC/DTC, скорость/проскальзывание колёс,
 вмешательство тормозов, блокировка заднего дифференциала, дроссель, моменты осей — см. `VEHICLE_EXPANSION_NOTES`.
 
-## Диагностический снимок для экрана настроек
+## Диагностический снимок (лист разработчика, `XOP_DEV=diag`)
+
+С 0.1.2 добавлены `latestSamples` — последний отсчёт каждого поля с `at` = время получения (сырые числа листа берутся
+отсюда, первые отсчёты — только история), `sources` — поле, давшее показанное значение, и `gearboxOil` —
+`shown | waitingChange | noSamples | providerUnavailable | notSubscribed`. Сигналам без своей причины в `reasons`
+записывается состояние интерфейса-источника.
+
+### Поля снимка (0.1.1)
 
 `adapter.diagnostics(nowMs): VehicleDiagnostics`:
 - `interfaces[]`: `iface`, `diagnosticOnly`, `subscribed`, `available`, `error`, `losses`, `samples`, `lastSampleAt`,
@@ -175,3 +182,14 @@ XOP_SIGNALS_SRC=../../work/research/idrive7-apps/kit/runtime/signals.js node --i
 - Отсутствие квалификатора распределения upstream принимает; на G07 не подтверждено (видно в `reasons`).
 - Масштаб TPMS (×0.1 в единице автомобиля) и температуры (−40) — из car_vitals/redline «seen on a car», не G07.
 - Удержание передачи без ограничения по времени держится на доступности провайдера VehicleInformation.
+
+## Диагностическое чтение UDS (0.1.2)
+
+`native/src/vehicle/uds/`:
+- `tasu.ts` — транспорт, только 0x22 и `READ_ALLOWLIST`;
+- `records.ts` — схемы, точная длина;
+- `ecus.ts` — блоки, принимаемые SGBD-индексы, выходы;
+- `reader.ts` — идентификация первой, периоды, пауза без экрана, диагностика.
+
+Модель создаёт его только в режиме автомобиля и только если `ctx.signals` дал `proxy/call/on/onAvailable`. Отсчёты идут в адаптер через `putUds`: доменные сигналы — приоритетом ниже SOME/IP, остальное — в `extras` (`NativeSnapshot.extra`).
+

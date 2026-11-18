@@ -34,7 +34,7 @@ function TempRow({ label, signal, max, f }: { label: string; signal: Signal<numb
 function TyreBlock({ wheel, state, f }: { wheel: Wheel; state: AppState; f: Format }) {
   const { t } = f;
   const s = state.snapshot.signals;
-  const p = f.num(s[`tyrePressure.${wheel}`], 2);
+  const p = f.num(s[`tyrePressure.${wheel}`], 1);
   const temp = f.num(s[`tyreTemperature.${wheel}`], 0);
   return (
     <div className={`tyre tyre--${wheel.toLowerCase()}`} aria-label={`${t.wheels[wheel].long} (${t.wheels[wheel].code})`} role="group">

@@ -75,10 +75,10 @@
     {
       "path": "kit/runtime/display.js",
       "status": "modified",
-      "sha256": "aecb8e2bb04ad105e1cf468aeb1bf7bbd0c1c6452ced6ab59c2dee59e979e9e0",
+      "sha256": "b0c9b1f9a523818a11ae7cf3825e99e0c19d5e788dfb4400dac11ff0629a7399",
       "upstreamBlob": "3f68b12ceaea688aa373c564fa90810f552f9832",
       "upstreamSha256": "4ae710fb0fdac75b871c4415ed99a5c926528d823c0dce056c0e5da3837cc158",
-      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it"
+      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video"
     },
     {
       "path": "kit/runtime/ecus.js",
@@ -240,18 +240,18 @@
     {
       "path": "kit/runtime/record.js",
       "status": "modified",
-      "sha256": "e41700e509ac07c6f57cc9eb90709aae3996446bcb0efa3634323bf4ee497169",
+      "sha256": "b5327e409881433bd7dcc3d7aaa6863dbb487675561470b24273ecd217e640a8",
       "upstreamBlob": "2c40448f761a2d3c526c764b045dc6d859c07528",
       "upstreamSha256": "0fda0a3094c726dc52b7fe9812b586d500806337ca5213c34bfece5606a7e74c",
-      "summary": "makeLayer keeps the pixel images a layer draws (images), so transports upload them before the layer"
+      "summary": "makeLayer keeps the pixel images a layer draws (images), so transports upload them before the layer; Recorder.video(id, x, y, w, h, r) records op 19 only when the recorder allows it (videoOk), play() skips op 19"
     },
     {
       "path": "kit/runtime/renderd.js",
       "status": "modified",
-      "sha256": "8372d17f64a4859ad00c45228404d6ba78329363cb2ca7c70d11c86b40afcd70",
+      "sha256": "24d8cf5830a470b00635cc6356676de6da021ee66a4d6c11ae1af5c4549941c5",
       "upstreamBlob": "21df6040b107dabbbe5593ccc70093b5c2238a0c",
       "upstreamSha256": "dc26de3883b43ecdd917de66cac470737104b43242c9746cfdc888c5b2f4c183",
-      "summary": "pixel images on mgu-render/1 connections (PROTOCOL.md of mgu-render 0.6.21): IMAGE 10 with premultiplied RGBA up to 1024 a side, X_PIXMAP/X_PIXELS beyond that where offered, op 18 rewritten to x y w h r id in a copy of each frame and layer; X_READY pixmap capability read; an image that cannot be sent is logged and emitted"
+      "summary": "pixel images on mgu-render/1 connections (PROTOCOL.md of mgu-render 0.6.21): IMAGE 10 with premultiplied RGBA up to 1024 a side, X_PIXMAP/X_PIXELS beyond that where offered, op 18 rewritten to x y w h r id in a copy of each frame and layer; X_READY pixmap capability read; an image that cannot be sent is logged and emitted; video (PROTOCOL.md \"Video\"): X_READY caps 16 as info.video, video(id, /dev/shm/mgu-video-<name>) / dropVideo(id) as VIDEO 13 / DROP_VIDEO 14 (at most 4, sent again after a reconnect or a resize), op 19 counted, and stripped from frames on an upstream-dialect connection"
     },
     {
       "path": "kit/runtime/run_timer.js",

@@ -101,6 +101,8 @@ export interface TextCall {
   font: string;
   literal: boolean;
   size: number;
+  x: number;
+  y: number;
 }
 
 /** Строгая поверхность: только методы Recorder; любой другой вызов — исключение. Считает вызовы. */
@@ -114,9 +116,9 @@ export function strictSurface(opts: { own?: boolean } = {}): Surface & { counts:
     for (const a of args) if (typeof a === 'number' && !Number.isFinite(a)) throw new Error(`${name}: non-finite argument ${a}`);
   };
   const impl: Record<string, (...a: unknown[]) => unknown> = {
-    text: (s, _x, _y, size, _c, o) => {
+    text: (s, x, y, size, _c, o) => {
       const op = (o ?? {}) as { font?: string; literal?: boolean };
-      texts.push({ s: String(s), font: op.font ?? 'label', literal: !!op.literal, size: Number(size) });
+      texts.push({ s: String(s), font: op.font ?? 'label', literal: !!op.literal, size: Number(size), x: Number(x), y: Number(y) });
       return String(s).length * Number(size) * 0.55;
     },
     textWidth: (s, size) => String(s).length * Number(size) * 0.55,
@@ -199,11 +201,14 @@ export interface FakeCtx extends MguCtx {
   /** Последнее ui.enabled(name, on) по каждой кнопке. */
   enabledState: Record<string, boolean>;
   values: Record<string, unknown>;
+  /** Листы, открытые приложением (ctx.sheet). */
+  sheets: object[];
 }
 
 export function fakeCtx(transport: FakeTransport, initial: Record<string, unknown> = {}, opts: { own?: boolean } = {}): FakeCtx {
   const listeners: ((k: string, v: unknown) => void)[] = [];
-  const values: Record<string, unknown> = { dataSource: 'demo', scenario: 'mountainTrail', ...initial };
+  // сохранённые настройки (как settings.json прежних версий): по умолчанию — ничего, кроме сценария
+  const values: Record<string, unknown> = { scenario: 'mountainTrail', ...initial };
   const ctx: FakeCtx = {
     clicks: {},
     tab: null,
@@ -214,6 +219,8 @@ export function fakeCtx(transport: FakeTransport, initial: Record<string, unknow
     labels: {},
     enabledState: {},
     values,
+    sheets: [],
+    sheet: (sh) => (ctx.sheets.push(sh), true),
     ui: {
       image: (name, cv) => {
         ctx.shown.push({ name, cv });
@@ -250,7 +257,6 @@ export function fakeCtx(transport: FakeTransport, initial: Record<string, unknow
     onTab: (fn) => {
       ctx.tab = fn;
     },
-    settingsRow: () => undefined,
     app: {
       on: (ev, fn) => {
         if (ev === 'shutdown') ctx.shutdown = fn;

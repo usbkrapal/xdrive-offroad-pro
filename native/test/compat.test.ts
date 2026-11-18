@@ -25,6 +25,8 @@ function runBundle(code: string, env: Env) {
       return id === './kit/mgu' ? { run: (sp: { start?: unknown }) => ((started = true), (spec = sp)) } : {};
     }
     if (id === 'zlib') return zlib;
+    // камеры: сокет моста и заголовки файлов кадров (используются только во время работы, не при загрузке)
+    if (id === 'fs' || id === 'net') return {};
     throw new Error(`unexpected require ${id}`);
   };
   const sandbox = vm.createContext({ Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, setImmediate });

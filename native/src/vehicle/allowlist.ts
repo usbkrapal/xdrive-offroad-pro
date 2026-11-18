@@ -32,6 +32,8 @@ export interface NumericOutput {
   /**
    * Несколько полей на один сигнал: меньше — главнее. Свежий допустимый отсчёт любого источника
    * побеждает недопустимый/отсутствующий другого; при двух допустимых — меньший priority.
+   * Второе поле допустимо как явно квалифицированный источник (своя проверенная кодировка/вариант). Неквалифицированная
+   * подмена запрещена только там, где равнозначность не установлена — у руля (см. ниже, проверяет тест).
    */
   readonly priority?: number;
 }
@@ -101,8 +103,13 @@ const SPLIT_MS = 10000;
 /** Redline tyres.js STALE_MS: на стоянке автомобиль шлёт шины редко. */
 const TPMS_MS = 10 * 60 * 1000;
 
-/** Периоды опроса геттером. */
-export const POLL_FAST_MS = 1000;
+/**
+ * Периоды опроса геттером. Быстрые поля с геттером (обороты, скорость, момент, ускорения, рыскание) — 5 Гц:
+ * vendor signals.js ставит таймер интерфейса на самый короткий период его полей (setInterval, без округления до
+ * секунды; проверяет vehicleSignalsRuntime.test). Это частота ОТСЧЁТОВ, не частота кадров рендерера.
+ * Поля только с уведомлениями (руль, педаль) геттера не имеют: их отсчёты — по мере прихода уведомлений.
+ */
+export const POLL_FAST_MS = 200;
 export const POLL_TEMP_MS = 5000;
 /** upstream car_vitals / live_data: TPMS { pollMs: 10000 }. */
 export const POLL_TPMS_MS = 10000;
@@ -221,14 +228,20 @@ export const VEHICLE_FIELDS: readonly FieldSpec[] = [
     iface: STEER,
     field: 'ActualSteeringAngleDriver',
     flags: 's',
-    outputs: [{ kind: 'number', member: STEER_MEMBER, id: 'steeringWheelAngleDeg', decode: decodeSteering, staleMs: FAST_MS, priority: 0 }],
+    outputs: [{ kind: 'number', member: STEER_MEMBER, id: 'steeringWheelAngleDeg', decode: decodeSteering, staleMs: FAST_MS }],
     diag: [STEER_MEMBER],
   },
+  // Запасное поле руля — только сырой журнал. upstream (live_data, xdrive_live) читает оба поля одной формулой; что на
+  // G07 кодировка NoCRC та же, не подтверждено. Фото 0.1.1 показывают ПЕРВЫЕ отсчёты двух полей, полученные в разное
+  // время (главное raw 47321, NoCRC raw 32696), — не пару при одном положении руля: они не доказывают ни разную
+  // кодировку, ни то, что замеченные скачки вызваны сменой источника. Доказано другое: прежний код мог переключаться
+  // между полями, а равнозначность второго не установлена. Отказ от этой подмены — осторожное исправление, а не
+  // подтверждённая аппаратная причина скачков.
   {
     iface: STEER,
     field: 'actualSteeringAngleDriverNoCRC',
     flags: 's',
-    outputs: [{ kind: 'number', member: STEER_MEMBER, id: 'steeringWheelAngleDeg', decode: decodeSteering, staleMs: FAST_MS, priority: 1 }],
+    outputs: [],
     diag: [STEER_MEMBER],
   },
   {
@@ -338,8 +351,8 @@ export const SIGNAL_IFACE: ReadonlyMap<SignalId, string> = new Map(
  * VEHICLE_SIGNAL_IDS (проверяется тестом). Добавлять источник только по подтверждённой upstream-реализации.
  */
 export const VEHICLE_EXPANSION_NOTES: Readonly<Partial<Record<SignalId, string>>> = {
-  'attitude.pitchDeg': 'абсолютного угла нет; CDS nickgeschwindigkeit — СКОРОСТЬ тангажа (°/с), в угол не интегрируется',
-  'attitude.rollDeg': 'абсолютного угла нет; CDS wankgeschwindigkeit — СКОРОСТЬ крена (°/с), в угол не интегрируется',
+  'attitude.pitchDeg': 'угол к горизонту: публичного источника нет; LaneSlope — уклон ДОРОГИ (TLT_RW), масштаб неизвестен; BDC D54D — кузов к осям (отдельно); скорости CDS в угол не интегрируются',
+  'attitude.rollDeg': 'угол к горизонту: публичного источника нет (крена к осям нет и в BDC); LaneSlope — уклон дороги, масштаб неизвестен; скорость крена в угол не интегрируется',
   altitudeM: 'источник не найден',
   'engine.throttlePercent': 'дроссель не найден; педаль газа — отдельный сигнал acceleratorPedalPercent',
   'xdrive.frontTorqueNm': 'момента оси нет; только доля BasicDataSet (Н·м из неё не выводятся)',

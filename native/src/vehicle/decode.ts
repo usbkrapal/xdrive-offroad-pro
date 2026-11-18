@@ -60,8 +60,9 @@ function int16Of(v: unknown): number | null {
 
 /**
  * SteeringAngle.ActualSteeringAngleDriver / actualSteeringAngleDriverNoCRC .actualValueSteeringAngleDriver:
- * int16 × 0.04395 °, 65535 — нет значения (upstream xdrive_live.js, live_data/signals.js: s16, lim ±900).
- * Привязка может отдать и uint16 (дополнительный код), и уже int16: −1 и есть 0xFFFF — тоже «нет значения».
+ * int16 × 0.04395 °, lim ±900 — масштаб и знак — ЛУЧШАЯ ДОГАДКА upstream (live_data/signals.js помечает их `q`:
+ * «scaling is a best guess»), не определение BMW. 65535 пропускает upstream xdrive_live.js; что это «нет значения»,
+ * а не допустимый отсчёт, не доказано. Привязка может отдать и uint16, и int16: −1 и есть 0xFFFF.
  */
 export function decodeSteering(v: unknown): Decoded {
   if (v === 0xffff || v === -1) return INVALID;
@@ -79,12 +80,13 @@ export function decodeYawRate(v: unknown): Decoded {
 }
 
 /**
- * AcceleratorPedal.AngleAcceleratorPedal.actualValueAngleAcceleratorPedal: × 0.025 % (live_data/signals.js).
- * Физический диапазон raw 0…4000 (0…100 %); всё вне него, в т. ч. сентинелы, — нет значения.
+ * AcceleratorPedal.AngleAcceleratorPedal.actualValueAngleAcceleratorPedal: × 0.025 % — лучшая догадка upstream
+ * (live_data/signals.js, `q`, lim −2…102 %). Полный ход на G07 не измерен: принимается raw 0…4080 (до 102 %, как
+ * upstream; kick-down может давать больше 100 %), всё выше, в т. ч. сентинелы, — нет значения.
  * Это положение педали, НЕ дроссель (engine.throttlePercent).
  */
 export function decodePedal(v: unknown): Decoded {
   const raw = rawUInt(v, 0xffff);
-  if (raw === null || raw > 4000) return INVALID;
+  if (raw === null || raw > 4080) return INVALID;
   return raw * 0.025;
 }

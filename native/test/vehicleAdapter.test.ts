@@ -175,3 +175,15 @@ describe('VehicleAdapter (только чтение, фальшивый тран
     assert.equal(st.subscribed, st.interfaces - 1);
   });
 });
+
+describe('журнал: состав поля (имена и типы членов, без значений)', () => {
+  it('объект — имена:типы, не больше 16; не объект — тип', async () => {
+    const { memberShape } = await import('../src/vehicle/adapter');
+    assert.equal(memberShape({ actualValueSteeringAngleDriver: 60030, qualifier: 2, crc: 'x' }), '{actualValueSteeringAngleDriver:int, qualifier:int, crc:string}');
+    assert.equal(memberShape(5), 'number');
+    const many: Record<string, number> = {};
+    for (let i = 0; i < 20; i++) many[`m${i}`] = 1.5;
+    assert.match(memberShape(many), /m15:number, …\+4\}$/);
+    assert.doesNotMatch(memberShape({ a: 60030 }), /60030/);
+  });
+});

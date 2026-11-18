@@ -24,7 +24,7 @@ SPEC = {
         'de.bmw.infrastructure.VehicleInformation': {'_optional': 'gear', 'statusGearboxDrive': 's'},
     },
     'screens': [{'name': 'MAIN', 'kind': 'canvas', 'title': 'Store Fixture', 'buttons': [['BTN_PAGE', 'Next'], ['BTN_SETTINGS', 'Settings']]}],
-    'settings': [{'key': 'dataSource', 'label': 'Data source', 'type': 'choice', 'default': 'demo',
+    'settings': [{'key': 'dataSource', 'label': 'Data source', 'type': 'choice', 'default': 'vehicle', 'hidden': True,
                   'options': [['demo', 'Demo'], ['vehicle', 'Vehicle']]}],
 }
 

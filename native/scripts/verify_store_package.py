@@ -8,7 +8,9 @@ package: архив без обхода путей, ссылок и спецфа
 package.json (id, x.y.z, mguHmi, requires, без автозапуска); настоящие main/kit/RHMI (33 языка),
 русская локаль и кириллица, уведомления шрифтов и лицензий; SOME/IP-манифест = платформа сборщика +
 сигналы app.json, у сигналов только r/s.
-release: catalog.json (schema 2), mgu-store.json, icon.png, SHA256SUMS — размеры и sha256 совпадают.
+release: объединённый выпуск — приложение, наборы xop-camera-bridge и xop-camrx (release_tools.verify_kit:
+формат deploy, sha256 файлов, юнит, Node 8, ELF), исходники xop-camrx (GPL), catalog.json (schema 2: три компонента,
+цепочка app -> bridge -> camrx, mgu-render >= 0.6.21), mgu-store.json, icon.png, SHA256SUMS — размеры и sha256 совпадают.
 Печатает JSON-сводку; при проблемах — их список и код 1.
 """
 import argparse
@@ -25,6 +27,10 @@ import tarfile
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import release_tools as rt  # noqa: E402  (tool kits, ELF policy, source archive, catalog graph)
+
 PROJECT = os.path.abspath(os.path.join(HERE, '..', '..'))
 DEFAULT_BUILDER = os.path.join(PROJECT, 'vendor', 'idrive7-apps', 'kit', 'tools', 'build.py')
 
@@ -157,6 +163,15 @@ def check_contents(files, problems):
     problems.check('meta.json' not in files, 'meta.json (the .mgu layout) in a store package')
 
 
+# The one diagnostic transport the app may declare (read-only use is enforced in native/src/vehicle/uds/tasu.ts):
+# the head unit's InternalTasu, exactly as the MIT idrive7-apps car_vitals / zf8hp apps declare it.
+TASU_IFACE = 'com.harman.infotainment.systemfunctions.tasu.tasu.InternalTasu'
+TASU_ENTRY = {'instances': 'SystemFunctionsInternalTasuInst1', 'methods': ['sendTasuRequest'], 'broadcasts': ['sendTasuResponse']}
+# Live cameras (native/src/camera/request.ts): the camera unit's state plus an ordinary view request and its release.
+ICAM2_IFACE = 'de.bmw.infotainment.video.cameraproxy.ICAM2Proxy'
+ICAM2_ENTRY = {'instances': '1', 'attributes': {'currentState': 'rs'}, 'methods': ['changeState', 'clientAttach', 'clientDetach']}
+
+
 def check_signals(manifest, spec, consts, problems):
     proxies = manifest.get('proxies') if isinstance(manifest, dict) else None
     if not problems.check(isinstance(proxies, dict), 'manifest.json has no proxies'):
@@ -177,6 +192,12 @@ def check_signals(manifest, spec, consts, problems):
         entry = proxies.get(iface)
         if not isinstance(entry, dict):
             problems.append('candidate %s is not a field list in manifest.json' % iface)
+            continue
+        if iface == TASU_IFACE:
+            problems.check(entry == TASU_ENTRY, 'diagnostic transport %s is %r, expected exactly %r' % (iface, entry, TASU_ENTRY))
+            continue
+        if iface == ICAM2_IFACE:
+            problems.check(entry == ICAM2_ENTRY, 'camera interface %s is %r, expected exactly %r' % (iface, entry, ICAM2_ENTRY))
             continue
         want = {k: v for k, v in fields.items() if not k.startswith('_')}
         attrs = entry.get('attributes') or {}
@@ -299,7 +320,9 @@ def verify_package(path, spec, builder=DEFAULT_BUILDER, language='ru'):
     rt = load_json(files, 'javascript/kit/app-spec.json', problems) or {}
     problems.check(rt.get('id') == app_id and rt.get('version') == ver, 'app-spec.json names %r %r' % (rt.get('id'), rt.get('version')))
     ds = [s for s in rt.get('settings') or [] if s.get('key') == 'dataSource']
-    problems.check(len(ds) == 1 and ds[0].get('default') == 'demo', 'data source does not default to demo')
+    # 0.1.2: vehicle data by default; the data source is a hidden setting (demo only via XOP_DEV at launch, never stored)
+    problems.check(len(ds) == 1 and ds[0].get('default') == 'vehicle' and ds[0].get('hidden') is True,
+                   'data source is not a hidden setting defaulting to vehicle')
     loc = load_json(files, 'javascript/kit/locale.json', problems) or {}
     problems.check(loc.get('language') == language, 'locale.json language %r != %r' % (loc.get('language'), language))
     if language == 'ru':
@@ -325,7 +348,13 @@ def verify_package(path, spec, builder=DEFAULT_BUILDER, language='ru'):
     return summary, problems, icon
 
 
-def verify_release(directory, spec, builder=DEFAULT_BUILDER, repository=None, tag=None, language='ru'):
+def _tool_kits(names):
+    return {tid: [n for n in names if n.startswith(tid + '@') and n.endswith('.tgz')] for tid in rt.TOOL_IDS}
+
+
+def verify_release(directory, spec, builder=DEFAULT_BUILDER, repository=None, tag=None, language='ru', node8=None):
+    """The combined release: the app, xop-camera-bridge and xop-camrx kits, the xop-camrx corresponding source,
+    icon.png, catalog.json (schema 2, three components and their dependency chain), mgu-store.json, SHA256SUMS."""
     problems = Problems()
     if not os.path.isdir(directory):
         problems.append('release folder not found: %s' % directory)
@@ -336,22 +365,44 @@ def verify_release(directory, spec, builder=DEFAULT_BUILDER, repository=None, ta
         problems.check(os.path.isfile(p) and not os.path.islink(p), '%s is not a regular file' % n)
     app_id = spec.get('id')
     tgzs = [n for n in names if n.startswith(app_id + '@') and n.endswith('.tgz')]
+    kits = _tool_kits(names)
+    sources = [n for n in names if re.match(r'^xop-camrx-\d+\.\d+\.\d+-source\.tar\.gz$', n)]
     expected = {'catalog.json', 'mgu-store.json', 'icon.png', 'SHA256SUMS'}
-    for n in sorted(set(names) - expected - set(tgzs)):
+    known = expected | set(tgzs) | set(sources) | {n for v in kits.values() for n in v}
+    for n in sorted(set(names) - known):
         if n != '.gitkeep':
-            problems.append('unexpected file in release folder: %s' % n)
+            copy = rt.conflict_copy_of(n, lambda b: b in known)
+            problems.append('conflict copy of %s in release folder: %s' % (copy, n) if copy else 'unexpected file in release folder: %s' % n)
     for n in sorted(expected - set(names)):
         problems.append('missing %s' % n)
     problems.check(len(tgzs) == 1, 'expected exactly one %s@<version>.tgz, found %r' % (app_id, tgzs))
+    for tid, found in kits.items():
+        problems.check(len(found) == 1, 'expected exactly one %s@<version>.tgz, found %r' % (tid, found))
+    problems.check(len(sources) == 1, 'expected exactly one xop-camrx-<version>-source.tar.gz, found %r' % sources)
     if problems:
         return None, problems
     pkg, pkg_problems, pkg_icon = verify_package(os.path.join(directory, tgzs[0]), spec, builder, language)
     problems.extend('package: ' + p for p in pkg_problems)
-    if not pkg or pkg_problems:
+    tool = {}
+    for tid in rt.TOOL_IDS:
+        s, kp = rt.verify_kit(os.path.join(directory, kits[tid][0]), tid, node8 if tid == rt.BRIDGE_ID else None)
+        problems.extend('%s: %s' % (tid, p) for p in kp)
+        tool[tid] = s
+    if not pkg or pkg_problems or not all(tool.values()) or problems:
         return None, problems
 
     def read(n):
         return open(os.path.join(directory, n), 'rb').read()
+
+    camrx = tool[rt.CAMRX_ID]
+    src = camrx.get('source') or {}
+    problems.check(src.get('name') == sources[0], 'xop-camrx NOTICE names %r, the release has %s' % (src.get('name'), sources[0]))
+    problems.check(src.get('sha256') == sha256(read(sources[0])), 'xop-camrx NOTICE source sha256 does not match %s' % sources[0])
+    problems.check(sources[0] == 'xop-camrx-%s-source.tar.gz' % camrx['version'], 'source archive version differs from the xop-camrx kit')
+    elf_sha = None
+    with tarfile.open(os.path.join(directory, kits[rt.CAMRX_ID][0]), 'r:gz') as t:
+        elf_sha = sha256(t.extractfile('files/xop-camrx').read())
+    problems.extend(rt.verify_source_archive(os.path.join(directory, sources[0]), camrx['version'], elf_sha))
 
     icon = read('icon.png')
     problems.check(icon == pkg_icon, 'icon.png is not the package entry-point icon')
@@ -364,27 +415,36 @@ def verify_release(directory, spec, builder=DEFAULT_BUILDER, repository=None, ta
         return None, problems
     problems.check(catalog.get('schema') == 2, 'catalog.json schema %r' % catalog.get('schema'))
     comps = catalog.get('components') or []
-    if not problems.check(len(comps) == 1, 'catalog.json lists %d components' % len(comps)):
+    ids = [c.get('id') for c in comps]
+    if not problems.check(sorted(ids) == sorted([app_id] + list(rt.TOOL_IDS)) and len(ids) == 3,
+                          'catalog.json lists %r, expected %s, %s and %s' % (ids, app_id, rt.BRIDGE_ID, rt.CAMRX_ID)):
         return None, problems
-    c = comps[0]
-    problems.check(c.get('id') == app_id and c.get('kind') == 'app', 'catalog id/kind %r %r' % (c.get('id'), c.get('kind')))
-    problems.check(c.get('version') == pkg['version'], 'catalog version %r != package %r' % (c.get('version'), pkg['version']))
-    problems.check('build' not in c, 'catalog entry has "build": the artifact is a built OAP package')
-    problems.check(c.get('mguHmi') == pkg['mguHmi'], 'catalog mguHmi %r' % c.get('mguHmi'))
-    problems.check(c.get('requires') == pkg['requires'], 'catalog requires %r != package %r' % (c.get('requires'), pkg['requires']))
-    problems.check(bool(c.get('title')) and bool(c.get('description')), 'catalog title/description empty')
-    art = c.get('artifact') or {}
-    problems.check(art.get('name') == pkg['file'], 'artifact name %r != %r' % (art.get('name'), pkg['file']))
-    problems.check(art.get('size') == pkg['size'], 'artifact size %r != %r' % (art.get('size'), pkg['size']))
-    problems.check(art.get('sha256') == pkg['sha256'], 'artifact sha256 does not match the package')
-    url = art.get('url')
-    if repository:
-        want = 'https://github.com/%s/releases/download/%s/%s' % (repository, tag or 'catalog', pkg['file'])
-        problems.check(url == want, 'artifact url %r != %r' % (url, want))
-    else:
-        problems.check(url == pkg['file'], 'artifact url %r is not the relative %r' % (url, pkg['file']))
-    want_icon = 'https://github.com/%s/releases/download/%s/icon.png' % (repository, tag or 'catalog') if repository else 'icon.png'
-    problems.check(c.get('icon') == want_icon and c.get('iconSha256') == sha256(icon), 'catalog icon / iconSha256')
+    by_id = {c['id']: c for c in comps}
+    artifacts = {app_id: pkg, rt.BRIDGE_ID: tool[rt.BRIDGE_ID], rt.CAMRX_ID: camrx}
+
+    def url_of(name):
+        return 'https://github.com/%s/releases/download/%s/%s' % (repository, tag or 'catalog', name) if repository else name
+
+    for cid, s in artifacts.items():
+        c = by_id[cid]
+        kind = 'app' if cid == app_id else 'tool'
+        problems.check(c.get('kind') == kind, '%s: catalog kind %r' % (cid, c.get('kind')))
+        problems.check(c.get('version') == s['version'], '%s: catalog version %r != artifact %r' % (cid, c.get('version'), s['version']))
+        problems.check('build' not in c, '%s: catalog entry has "build" (artifacts are built)' % cid)
+        problems.check(c.get('mguHmi') == ['ID7'], '%s: catalog mguHmi %r' % (cid, c.get('mguHmi')))
+        problems.check(c.get('uninstallable') is True, '%s: not uninstallable' % cid)
+        problems.check('optional' not in c and 'mguProvides' not in c, '%s: optional/mguProvides set (installed as a requirement)' % cid)
+        problems.check(bool(c.get('title')) and bool(c.get('description')), '%s: catalog title/description empty' % cid)
+        art = c.get('artifact') or {}
+        problems.check(art.get('name') == s['file'], '%s: artifact name %r != %r' % (cid, art.get('name'), s['file']))
+        problems.check(art.get('size') == s['size'], '%s: artifact size %r != %r' % (cid, art.get('size'), s['size']))
+        problems.check(art.get('sha256') == s['sha256'], '%s: artifact sha256 does not match the file' % cid)
+        problems.check(art.get('url') == url_of(s['file']), '%s: artifact url %r != %r' % (cid, art.get('url'), url_of(s['file'])))
+    app_req = by_id[app_id].get('requires') or {}
+    problems.check({k: app_req.get(k) for k in pkg['requires']} == pkg['requires'], 'app catalog requires %r lack the package requires %r' % (app_req, pkg['requires']))
+    rt.check_catalog_graph(comps, problems, app_id)
+    c = by_id[app_id]
+    problems.check(c.get('icon') == url_of('icon.png') and c.get('iconSha256') == sha256(icon), 'catalog icon / iconSha256')
     entry = (store.get('apps') or {}).get(app_id) or {}
     problems.check(list((store.get('apps') or {}).keys()) == [app_id], 'mgu-store.json apps %r' % list((store.get('apps') or {}).keys()))
     problems.check(entry.get('title') == c.get('title') and entry.get('description') == c.get('description'), 'mgu-store.json title/description differ from catalog')
@@ -399,7 +459,9 @@ def verify_release(directory, spec, builder=DEFAULT_BUILDER, repository=None, ta
     for n, h in sums.items():
         if n in names:
             problems.check(sha256(read(n)) == h, 'SHA256SUMS mismatch for %s' % n)
-    return dict(pkg, catalogUrl=url), problems
+    url = by_id[app_id]['artifact']['url']
+    return dict(pkg, catalogUrl=url, tools={k: {x: v[x] for x in ('file', 'size', 'sha256', 'version')} for k, v in tool.items()},
+                source=sources[0], node8Check=tool[rt.BRIDGE_ID].get('node8Check'), elf=camrx.get('elf')), problems
 
 
 def main(argv=None):
@@ -411,6 +473,8 @@ def main(argv=None):
     ap.add_argument('--language', default='ru')
     ap.add_argument('--repository')
     ap.add_argument('--tag')
+    ap.add_argument('--node8', default=os.environ.get('XOP_NODE8', rt.NODE8_DEFAULT),
+                    help='Node 8 binary for the bridge syntax check ("" skips it)')
     a = ap.parse_args(argv)
     if not os.path.isfile(a.spec):
         print('app.json not found: %s (run npm run native:build)' % a.spec, file=sys.stderr)
@@ -419,7 +483,7 @@ def main(argv=None):
     if a.mode == 'package':
         summary, problems, _icon = verify_package(a.path, spec, a.builder, a.language)
     else:
-        summary, problems = verify_release(a.path, spec, a.builder, a.repository, a.tag, a.language)
+        summary, problems = verify_release(a.path, spec, a.builder, a.repository, a.tag, a.language, a.node8 or None)
     if problems:
         print('%s verification failed (%d problems):' % (a.mode, len(problems)), file=sys.stderr)
         for p in problems:

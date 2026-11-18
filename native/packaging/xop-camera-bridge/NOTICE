@@ -1,0 +1,14 @@
+xop-camera-bridge (Terrain Monitor / xDrive Offroad Pro)
+
+bridge.js is built by native/scripts/bundle-bridge.ts (esbuild, target Node 8.7) from the project's own
+TypeScript sources native/bridge/src/*.ts and native/src/camera/{ctl,mgvf}.ts. It contains no third-party code
+and no BMW SDK. It is licensed like the Terrain Monitor app itself (package.json "license": "UNLICENSED"):
+no licence is granted beyond use with the app.
+
+The bridge does not contain or link any part of xop-camrx. It starts the separately installed program
+/var/opt/xop-camrx/current/xop-camrx (component xop-camrx, GPL-3.0-or-later, with its own LICENSE, NOTICE
+and corresponding source) as a separate process with fixed arguments, and exchanges only command lines,
+status lines on stdout and the mgu-render frame files with it.
+
+It does not install, copy or change any other component's files, and it requires no component other than
+xop-camrx (and the Store's deploy tool). No program of another vendor is shipped here.

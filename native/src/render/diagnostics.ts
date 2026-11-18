@@ -1,12 +1,13 @@
-// «Диагностика чтения» — лист внутри «Настроек» (ctx.settingsRow → open()): для проверки на своём автомобиле, что
-// доступно, когда приходил последний отсчёт и какие сырые числа видны. Только снимок VehicleAdapter.diagnostics()
+// «Диагностика чтения» — лист поверх страницы (ctx.sheet) только в режиме разработчика (XOP_DEV, devAccess.ts): для
+// проверки на своём автомобиле, что доступно, когда приходил последний отсчёт и какие сырые числа видны. Только снимок VehicleAdapter.diagnostics()
 // (INTEGRATION.md): интерфейсы и поля из allowlist, члены из FieldSpec.diag — конечные числа (здесь показываются
 // только они). VIN, координат и иных идентификаторов в снимке нет и здесь не собирается ничего сверх него.
 // Сырые числа — без масштаба: значение сигнала остаётся «нет данных», пока масштаб не подтверждён.
 
 import type { Surface, Theme } from '../platform/kitTypes';
-import type { FieldDiagnostics, GetterStats, InterfaceDiagnostics, VehicleDiagnostics } from '../vehicle/adapter';
+import type { FieldDiagnostics, GearboxOilState, GetterStats, InterfaceDiagnostics, VehicleDiagnostics } from '../vehicle/adapter';
 import { formatNumber } from '../format';
+import type { UdsDiagnosticsSnapshot } from '../model/model';
 import { C } from './palette';
 
 export type Tone = 'head' | 'ok' | 'warn' | 'dim';
@@ -17,19 +18,18 @@ export interface DiagLine {
 }
 
 /** Предел строк листа (снимок адаптера и так ограничен; это — защита от роста списков). */
-export const MAX_LINES = 200;
+export const MAX_LINES = 320;
 /** Предел показанных сырых значений (по строке на член). */
 export const MAX_RAW = 60;
 const MAX_VALUE = 96;
 
 export const DIAG = {
   title: 'Диагностика чтения автомобиля',
-  row: 'Диагностика автомобиля',
-  rowOpen: 'Открыть',
-  rowDemo: 'Только в режиме «Автомобиль»',
+  /** Кнопка на странице «Системы» (только XOP_DEV). */
+  open: 'Диагностика',
   back: 'Назад',
   refresh: 'Обновить',
-  demo: 'Источник данных — демо. Диагностика есть только в режиме «Автомобиль» (Настройки → Источник данных).',
+  demo: 'Источник данных — демо (XOP_DEV=demo). Диагностика чтения есть только при данных автомобиля.',
   snapshot: 'Снимок',
   snapshotValue: (s: number) => `через ${s} с после включения чтения · обновляется кнопкой`,
   services: 'Сервисы (интерфейсы SOME/IP, только чтение)',
@@ -43,6 +43,8 @@ export const DIAG = {
   losses: (n: number) => `потерь ${n}`,
   diagOnly: 'только диагностика',
   droppedOffline: (n: number) => `без провайдера отброшено ${n}`,
+  /** Интервал между отсчётами поля (частота уведомлений/чтений автомобиля), мс. */
+  interval: (median: number, max: number) => `интервал ${Math.round(median)} мс (макс ${Math.round(max)})`,
   // чтение геттером (только поля с геттером и вендорный signals.js): счётчики, без времени
   read: 'чтение',
   readOk: (n: number) => `успешно ${n}`,
@@ -56,10 +58,26 @@ export const DIAG = {
   reasons: 'Почему без значения',
   units: 'Единицы TPMS (давление / температура)',
   gearboxOil: 'Масло КПП',
-  gearboxOilOn: 'показывается',
-  gearboxOilWait: 'ждём изменения сырого значения',
-  raw: 'Сырые числа (масштаб не подтверждён, не значения сигналов)',
+  gearboxOilState: {
+    shown: 'показывается',
+    waitingChange: 'отсчёты BasicDataSet есть — ждём изменения сырого значения',
+    noSamples: 'BasicDataSet доступен, отсчётов не было',
+    providerUnavailable: 'BasicDataSet недоступен — значения нет (это не ожидание изменения)',
+    notSubscribed: 'нет подписки на BasicDataSet',
+  } as Record<GearboxOilState, string>,
+  sources: 'Источник показанного значения (поле)',
+  steeringNote: 'Руль: только ActualSteeringAngleDriver; actualSteeringAngleDriverNoCRC — только сырое (равнозначность не подтверждена)',
+  raw: 'Последние сырые числа (время — получение; масштаб не подтверждён, не значения сигналов)',
   rawNone: 'сырых чисел ещё не было',
+  history: (first: number, changes: number) => `история: первых отсчётов ${first}, изменений ${changes}`,
+  uds: 'Диагностическое чтение (UDS 0x22, только чтение)',
+  udsOff: 'нет транспорта (InternalTasu)',
+  udsHidden: 'приостановлено: экран не виден',
+  udsStats: (s: { requests: number; ok: number; nrc: number; timeouts: number; refused: number; busyRetries: number }) =>
+    `запросов ${s.requests} · успешно ${s.ok} · NRC ${s.nrc} · без ответа ${s.timeouts} · отказ ${s.refused} · повторов «занят» ${s.busyRetries}`,
+  udsState: { pending: 'не опрошен', accepted: 'опознан', unverified: 'вариант не проверен', failed: 'не опознан' } as Record<string, string>,
+  candidate: 'кандидат (вариант не подтверждён)',
+  extraReasons: 'Причины (величины диагностического чтения)',
 } as const;
 
 const shortIface = (s: string) => s.replace(/^de\.bmw\.(infotainment\.|infrastructure\.|powertrain\.|chassis\.)?/, '');
@@ -75,6 +93,7 @@ function ifaceLine(d: VehicleDiagnostics, i: InterfaceDiagnostics): DiagLine {
 
 function fieldLine(d: VehicleDiagnostics, f: FieldDiagnostics): DiagLine {
   const parts = [DIAG.samples(f.samples), ageText(d.at, f.lastSampleAt)];
+  if (f.intervalMs) parts.push(DIAG.interval(f.intervalMs.median, f.intervalMs.max));
   if (f.droppedWhileUnavailable > 0) parts.push(DIAG.droppedOffline(f.droppedWhileUnavailable));
   return { label: `   ${f.field}`, value: parts.join(' · '), tone: f.samples > 0 ? 'dim' : 'warn' };
 }
@@ -96,10 +115,42 @@ export function getterLines(g: GetterStats): DiagLine[] {
   return out;
 }
 
-/** Строки листа из снимка. null — демо (снимка нет). Ограничено MAX_LINES. */
-export function diagnosticsLines(d: VehicleDiagnostics | null): DiagLine[] {
-  if (!d) return [{ label: DIAG.demo, value: '', tone: 'dim' }];
-  const out: DiagLine[] = [];
+/** Раздел UDS: транспорт, по блоку — идентификация и вердикт, по записи — счётчики, возраст, сырые байты, разбор. */
+export function udsLines(at: number, u: UdsDiagnosticsSnapshot | null): DiagLine[] {
+  const out: DiagLine[] = [{ label: DIAG.uds, value: '', tone: 'head' }];
+  if (!u) return [...out, { label: DIAG.udsOff, value: '', tone: 'warn' }];
+  out.push({ label: 'TASU', value: clip(u.available ? DIAG.udsStats(u.stats) : `${DIAG.unavailable}${u.error ? ` · ${u.error}` : ''}`), tone: u.available ? 'dim' : 'warn' });
+  if (!u.visible) out.push({ label: DIAG.udsHidden, value: '', tone: 'dim' });
+  if (u.stats.lastError) out.push({ label: `   ${DIAG.errorPast}`, value: clip(u.stats.lastError), tone: 'dim' });
+  for (const e of u.ecus) {
+    const head = [DIAG.udsState[e.state] ?? e.state, e.identity ? `F150 ${e.identity}` : null, e.variant].filter(Boolean).join(' · ');
+    out.push({ label: `${e.key} ${e.addr}`, value: clip(head), tone: e.state === 'accepted' ? 'ok' : 'warn' });
+    if (e.reason) out.push({ label: '   ', value: clip(e.reason), tone: 'dim' });
+    for (const r of e.records) {
+      if (!r.ok && !r.failed) continue;
+      out.push({ label: `   ${r.did} ${r.name}`, value: clip([`успешно ${r.ok}`, `ошибок ${r.failed}`, ageText(at, r.lastAt), r.lastError].filter(Boolean).join(' · ')), tone: r.lastError ? 'warn' : 'dim' });
+      if (r.lastRaw) out.push({ label: '      raw', value: clip(r.lastRaw), tone: 'dim' });
+      if (r.values) {
+        const vals = Object.keys(r.values).map((k) => `${k}=${r.values![k] === null ? '—' : formatNumber(r.values![k] as number, 2)}`);
+        out.push({ label: e.state === 'accepted' ? '      разбор' : `      ${DIAG.candidate}`, value: clip(vals.join(' ')), tone: 'dim' });
+      }
+    }
+  }
+  const reasons = Object.keys(u.extraReasons);
+  if (reasons.length) {
+    out.push({ label: DIAG.extraReasons, value: '', tone: 'head' });
+    for (const k of reasons) out.push({ label: k, value: clip(u.extraReasons[k]), tone: 'dim' });
+  }
+  return out;
+}
+
+/**
+ * Строки листа из снимка. null — демо (снимка нет). extra — строки приложения (рендерер, управление) сверху.
+ * Ограничено MAX_LINES.
+ */
+export function diagnosticsLines(d: (VehicleDiagnostics & { readonly uds?: UdsDiagnosticsSnapshot | null }) | null, extra: readonly DiagLine[] = []): DiagLine[] {
+  if (!d) return [...extra, { label: DIAG.demo, value: '', tone: 'dim' as Tone }].slice(0, MAX_LINES);
+  const out: DiagLine[] = [...extra];
   out.push({ label: DIAG.snapshot, value: DIAG.snapshotValue(Math.round(d.at / 1000)), tone: 'dim' });
   out.push({ label: DIAG.services, value: '', tone: 'head' });
   for (const i of d.interfaces) {
@@ -114,19 +165,18 @@ export function diagnosticsLines(d: VehicleDiagnostics | null): DiagLine[] {
     out.push({ label: DIAG.reasons, value: '', tone: 'head' });
     for (const [id, r] of reasons) out.push({ label: id, value: clip(String(r)), tone: 'dim' });
   }
+  const sources = Object.entries(d.sources).filter(([, f]) => !!f);
+  out.push({ label: DIAG.sources, value: '', tone: 'head' });
+  for (const [id, f] of sources) out.push({ label: id, value: clip(String(f)), tone: 'dim' });
+  out.push({ label: DIAG.steeringNote, value: '', tone: 'dim' });
   out.push({ label: DIAG.units, value: `${d.tyreUnits.pressure} / ${d.tyreUnits.temperature}`, tone: 'dim' });
-  out.push({ label: DIAG.gearboxOil, value: d.gearboxOilPromoted ? DIAG.gearboxOilOn : DIAG.gearboxOilWait, tone: 'dim' });
-  // последнее значение каждого поля: из кольца изменений (новее), иначе первый отсчёт; только конечные числа
-  out.push({ label: DIAG.raw, value: '', tone: 'head' });
-  const latest = new Map<string, { at: number; field: string; values: Readonly<Record<string, unknown>> }>();
-  for (const e of [...d.firstSamples, ...d.changes]) {
-    const k = `${e.iface}|${e.field}`;
-    const prev = latest.get(k);
-    if (!prev || e.at >= prev.at) latest.set(k, e);
-  }
+  out.push({ label: DIAG.gearboxOil, value: DIAG.gearboxOilState[d.gearboxOil], tone: d.gearboxOil === 'shown' || d.gearboxOil === 'waitingChange' ? 'dim' : 'warn' });
+  if (d.uds !== undefined) out.push(...udsLines(d.at, d.uds));
+  // последний отсчёт каждого поля (время — его получение), только конечные числа; первые отсчёты — история
+  out.push({ label: DIAG.raw, value: DIAG.history(d.firstSamples.length, d.changes.length), tone: 'head' });
   // строка-заголовок на поле (возраст отсчёта), под ней по строке на каждый числовой член; строки и enum — не здесь
   let raw = 0;
-  for (const e of latest.values()) {
+  for (const e of d.latestSamples) {
     if (raw >= MAX_RAW) break;
     const nums = Object.entries(e.values).filter(([, v]) => typeof v === 'number' && Number.isFinite(v)) as [string, number][];
     if (!nums.length) continue;
@@ -192,20 +242,26 @@ export interface DiagnosticsSheet {
   refresh(): void;
 }
 
-/** read() — снимок модели (по открытию и «Обновить»), не на каждый кадр. */
-export function diagnosticsSheet(read: () => VehicleDiagnostics | null): DiagnosticsSheet {
+/** read() — снимок модели (по открытию и «Обновить»), не на каждый кадр; extra() — строки приложения (тогда же). */
+export function diagnosticsSheet(read: () => (VehicleDiagnostics & { readonly uds?: UdsDiagnosticsSnapshot | null }) | null, extra: () => readonly DiagLine[] = () => []): DiagnosticsSheet {
   const sh: DiagnosticsSheet = {
     title: DIAG.title,
     lines: [],
     offset: 0,
     refresh() {
-      let d: VehicleDiagnostics | null = null;
+      let d: (VehicleDiagnostics & { readonly uds?: UdsDiagnosticsSnapshot | null }) | null = null;
+      let x: readonly DiagLine[] = [];
       try {
         d = read();
       } catch {
         d = null;
       }
-      this.lines = diagnosticsLines(d);
+      try {
+        x = extra();
+      } catch {
+        x = [];
+      }
+      this.lines = diagnosticsLines(d, x);
     },
     draw(r, t) {
       r.clear(t.bg);

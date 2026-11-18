@@ -1,8 +1,9 @@
-// Ограниченный журнал сырых значений для проверки на автомобиле (экран «Настройки» позже, см. INTEGRATION.md).
+// Ограниченный журнал сырых значений для проверки на автомобиле (лист диагностики, см. INTEGRATION.md).
 // Пишутся ТОЛЬКО заранее известные члены структур из allowlist (FieldSpec.diag): числа и имена enum.
 // Никаких VIN, координат и т. п. — на такие поля приложение и не подписывается.
-// Объём: первый отсчёт каждого поля + общее кольцо изменений (RING_MAX записей), не чаще раза
-// в CHANGE_MIN_MS на поле; покадрового журнала нет.
+// Объём: последний отсчёт каждого поля (перезаписывается, время — момент получения), первый отсчёт каждого
+// поля (история запуска) + общее кольцо изменений (RING_MAX записей), не чаще раза в CHANGE_MIN_MS на поле;
+// покадрового журнала нет. Число полей ограничено allowlist.
 
 export type DiagValue = number | string | boolean | null;
 
@@ -27,30 +28,39 @@ export function diagValue(x: unknown): DiagValue {
 
 export class DiagLog {
   private readonly first = new Map<string, DiagEntry>();
+  private readonly latest = new Map<string, DiagEntry>();
   private readonly lastKey = new Map<string, string>();
   private readonly lastAt = new Map<string, number>();
   private ring: DiagEntry[] = [];
 
-  record(iface: string, field: string, members: readonly string[], v: unknown, at: number, changes: boolean): void {
-    if (!members.length) return;
+  /** Записать отсчёт; возвращает разобранные известные члены (null — у поля их нет). */
+  record(iface: string, field: string, members: readonly string[], v: unknown, at: number, changes: boolean): Readonly<Record<string, DiagValue>> | null {
+    if (!members.length) return null;
     const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
     const values: Record<string, DiagValue> = {};
     for (const m of members) if (o[m] !== undefined) values[m] = diagValue(o[m]);
     const id = `${iface}|${field}`;
     const key = JSON.stringify(values);
     const entry: DiagEntry = { at, iface, field, values };
+    this.latest.set(id, entry);
     if (!this.first.has(id)) {
       this.first.set(id, entry);
       this.lastKey.set(id, key);
       this.lastAt.set(id, at);
-      return;
+      return values;
     }
-    if (!changes || this.lastKey.get(id) === key) return;
-    if (at - (this.lastAt.get(id) ?? -Infinity) < CHANGE_MIN_MS) return;
+    if (!changes || this.lastKey.get(id) === key) return values;
+    if (at - (this.lastAt.get(id) ?? -Infinity) < CHANGE_MIN_MS) return values;
     this.lastKey.set(id, key);
     this.lastAt.set(id, at);
     this.ring.push(entry);
     if (this.ring.length > RING_MAX) this.ring = this.ring.slice(this.ring.length - RING_MAX);
+    return values;
+  }
+
+  /** Последний отсчёт каждого поля (не реже каждого колбэка), at — время его получения. */
+  latestSamples(): DiagEntry[] {
+    return Array.from(this.latest.values());
   }
 
   firstSamples(): DiagEntry[] {

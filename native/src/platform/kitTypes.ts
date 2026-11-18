@@ -53,6 +53,10 @@ export interface Surface {
   text(str: string, x: number, y: number, size: number, c: Color, opts?: TextOpts): number;
   textWidth(str: string, size: number, opts?: TextOpts): number;
   image(id: number, x: number, y: number, w: number, h: number): Surface;
+  /** Видео id (RenderConnection.video), op 19 — только где запись это допускает (videoOk); false — не записано. */
+  video?(id: number, x: number, y: number, w: number, h: number, r?: number): boolean;
+  /** display.js: этот кадр может нести видео (mgu-render/1 с видео, GPU-путь показывает экран). */
+  videoOk?: boolean;
   blit(layer: Layer, x: number, y: number): Surface;
   alpha(a: number): Surface;
   clip(x: number, y: number, w: number, h: number): Surface;
@@ -147,6 +151,13 @@ export interface RenderConnection {
   readonly native?: boolean;
   /** Рендерер маршрутизирует касания (четвёртое слово READY). */
   readonly touch?: boolean;
+  /** X_READY mgu-render/1: возможности рендерера (controller — у HMI есть шлюз контроллера iDrive; video — кадры из /dev/shm). */
+  readonly info?: { readonly controller?: boolean; readonly video?: boolean } | null;
+  /** Рендерер принимает видео на этом соединении. */
+  readonly videoOk?: boolean;
+  /** Назвать файл кадров видео id (/dev/shm/mgu-video-*); false — отклонено. */
+  video?(id: number, path: string): boolean;
+  dropVideo?(id: number): void;
 }
 
 /** kit/runtime/display.js Display (ctx.display) — только используемое. */
@@ -157,6 +168,8 @@ export interface DisplayApi {
   readonly headBadges?: boolean;
   readonly gpu?: RenderConnection | null;
   layout?(): string;
+  /** kit сам ведёт экран (mgu-render/1 с касанием, «Весь экран»). */
+  own?(): boolean;
 }
 
 /** ctx из kit/mgu.js (и заглушки kit/tools/hu-stub.js). */
@@ -166,13 +179,20 @@ export interface MguCtx {
   ui: UiApi;
   settings: SettingsApi;
   log: Log;
-  signals: { watch: WatchFn };
+  /** proxy/call/on/onAvailable — vendor signals.js; используются ТОЛЬКО узким транспортом чтения vehicle/uds/tasu.ts. */
+  signals: {
+    watch: WatchFn;
+    proxy?(iface: string, instance: string): Promise<unknown>;
+    call?(p: unknown, method: string, params: Record<string, unknown>, timeoutMs?: number): Promise<unknown>;
+    on?(p: unknown, name: string, fn: (v: unknown) => void, log?: unknown): Promise<unknown>;
+    onAvailable?(p: unknown, fn: (a: boolean) => void): Promise<unknown>;
+  };
   theme(): Theme;
   canvas(w: number, h: number): Surface;
   loop(screen: string, fps: number, fn: () => unknown): LoopHandle;
   onTab(fn: (i: number, closedSheet?: boolean) => unknown): void;
-  settingsRow?(row: { label: string; value?: string | (() => string); open?: () => unknown }): void;
-  hideButton?(id: string): void;
+  /** Лист (sheet.js) поверх страницы; false — нельзя (программный путь, другой рендерер). */
+  sheet?(sh: object): boolean;
   /** На машине — OnlineApp SDK; в заглушке head unit его нет. */
   app?: { on?(ev: string, fn: () => void): void };
 }

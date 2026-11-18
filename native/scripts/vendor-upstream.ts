@@ -48,15 +48,21 @@ export const MODIFIED: Record<string, string> = {
   'kit/runtime/renderd.js':
     'pixel images on mgu-render/1 connections (PROTOCOL.md of mgu-render 0.6.21): IMAGE 10 with premultiplied RGBA ' +
     'up to 1024 a side, X_PIXMAP/X_PIXELS beyond that where offered, op 18 rewritten to x y w h r id in a copy of ' +
-    'each frame and layer; X_READY pixmap capability read; an image that cannot be sent is logged and emitted',
+    'each frame and layer; X_READY pixmap capability read; an image that cannot be sent is logged and emitted; ' +
+    'video (PROTOCOL.md "Video"): X_READY caps 16 as info.video, video(id, /dev/shm/mgu-video-<name>) / dropVideo(id) ' +
+    'as VIDEO 13 / DROP_VIDEO 14 (at most 4, sent again after a reconnect or a resize), op 19 counted, and stripped ' +
+    'from frames on an upstream-dialect connection',
   'kit/runtime/signals.js':
     'watch(): poll timer cleared on shutdown and no callbacks after it; at most one getValue() per field in flight ' +
     "(polls skipped while the binding's 3 s timeout has not settled it, never stacked); provider epoch: answers to reads " +
     'started before a loss and notifications while the provider is away are dropped; per-field fieldPollMs, ' +
     'onAvailability, res.losses, res.reads (getter counts/times/short error text, no values)',
-  'kit/runtime/record.js': 'makeLayer keeps the pixel images a layer draws (images), so transports upload them before the layer',
+  'kit/runtime/record.js':
+    'makeLayer keeps the pixel images a layer draws (images), so transports upload them before the layer; ' +
+    'Recorder.video(id, x, y, w, h, r) records op 19 only when the recorder allows it (videoOk), play() skips op 19',
   'kit/runtime/display.js':
-    "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it",
+    "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; " +
+    'canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video',
 };
 
 /** Добавленные файлы уведомлений (источник — относительно корня проекта или upstream-путь). */

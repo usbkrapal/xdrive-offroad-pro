@@ -1,31 +1,34 @@
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
-import { SCENARIO_IDS } from '../../src/domain/types';
-import { startApp, type AppHandle } from '../src/app';
+import { SCENARIO_IDS, type ScenarioId } from '../../src/domain/types';
+import { migrateSettings, SETTING_VALUES, startApp, type AppHandle } from '../src/app';
 import { IMAGE_ID } from '../src/assets/spec';
+import { devAccess, PRODUCTION, type DevAccess } from '../src/devAccess';
 import type { Kit } from '../src/platform/kit';
 import type { Surface } from '../src/platform/kitTypes';
-import { BAR_Y } from '../src/render/layout';
+import { DIAG } from '../src/render/diagnostics';
+import { H, Y1 } from '../src/render/layout';
 import { PAGE_COUNT } from '../src/render/pages';
-import { TAB_LABELS } from '../src/strings';
+import { T, TAB_LABELS } from '../src/strings';
 import { fakeCtx, fakeKit, FakeTransport, flush, hasUpstream, loadUpstream, strictSurface, syntheticAssets, type FakeCtx } from './helpers';
 
 const CDS = 'de.bmw.infotainment.vehicle.CDS';
 const NUM_CHARS = /^[0-9 ,.+\-/:%]*$/;
 const CAMERA_IDS = [IMAGE_ID.cameraFront, IMAGE_ID.cameraLeft, IMAGE_ID.cameraRight, IMAGE_ID.thumbFront, IMAGE_ID.thumbLeft, IMAGE_ID.thumbRight];
+const demo = (scenario: ScenarioId | null = null, diagnostics = false): DevAccess => ({ demo: true, scenario, diagnostics });
 
 const ASSETS_MOD = syntheticAssets();
 
 const apps: AppHandle[] = [];
 after(() => apps.forEach((a) => a.dispose()));
 
-function launch(init: Record<string, unknown> = {}, opts: { own?: boolean; kit?: Kit; canvas?: () => Surface } = {}) {
+function launch(init: Record<string, unknown> = {}, opts: { own?: boolean; kit?: Kit; canvas?: () => Surface; dev?: DevAccess } = {}) {
   const tr = new FakeTransport();
   const ctx = fakeCtx(tr, init, opts);
   if (opts.canvas) ctx.canvas = opts.canvas;
   const kit = opts.kit ?? fakeKit();
   let t = 0;
-  const app = startApp(ctx, kit, ASSETS_MOD, () => (t += 50));
+  const app = startApp(ctx, kit, ASSETS_MOD, () => (t += 50), opts.dev ?? PRODUCTION);
   apps.push(app);
   return { tr, ctx, kit, app };
 }
@@ -49,10 +52,56 @@ function checkTexts(cv: ReturnType<typeof strictSurface>, where: string): void {
   }
 }
 
+describe('режим по умолчанию и доступ разработчика', () => {
+  it('обычный запуск — данные автомобиля; сохранённое «Демо» прежней версии переносится и демо не включает', async () => {
+    const { ctx, app, tr } = launch({ dataSource: 'demo', layout: 'standard', renderer: 'software' });
+    assert.equal(app.model.dataMode, 'vehicle');
+    assert.deepEqual({ dataSource: ctx.values.dataSource, layout: ctx.values.layout, renderer: ctx.values.renderer }, SETTING_VALUES, 'перенос сохранён');
+    await flush();
+    assert.ok(tr.subs.length > 0, 'подписки автомобиля установлены');
+    // настройка из прежнего интерфейса больше не переключает источник
+    ctx.settings.set('dataSource', 'demo');
+    assert.equal(app.model.dataMode, 'vehicle');
+    app.dispose();
+  });
+
+  it('migrateSettings пишет только отличающееся', () => {
+    const tr = new FakeTransport();
+    const ctx = fakeCtx(tr, { ...SETTING_VALUES });
+    const writes: string[] = [];
+    ctx.settings.onChange((k) => writes.push(k));
+    assert.deepEqual(migrateSettings(ctx.settings), []);
+    assert.deepEqual(writes, []);
+  });
+
+  it('XOP_DEV: только явные токены; пусто/прочее — обычный запуск', () => {
+    assert.deepEqual(devAccess({}), PRODUCTION);
+    assert.deepEqual(devAccess({ XOP_DEV: '' }), PRODUCTION);
+    assert.deepEqual(devAccess({ XOP_DEV: 'yes' }), PRODUCTION);
+    assert.deepEqual(devAccess({ XOP_DEV: 'diag' }), { demo: false, scenario: null, diagnostics: true });
+    assert.deepEqual(devAccess({ XOP_DEV: '1' }), { demo: false, scenario: null, diagnostics: true });
+    assert.deepEqual(devAccess({ XOP_DEV: 'demo=hdcdescent, diag' }), { demo: true, scenario: 'hdcDescent', diagnostics: true });
+    assert.deepEqual(devAccess({ XOP_DEV: 'demo=nope' }), { demo: true, scenario: null, diagnostics: false });
+  });
+
+  it('демо разработчика: подписок на автомобиль нет, бейдж ДЕМО; сохранённая настройка остаётся «автомобиль»', async () => {
+    const { ctx, kit, app, tr } = launch({}, { dev: demo('climb') });
+    await flush();
+    assert.equal(app.model.dataMode, 'demo');
+    assert.equal(app.model.getState().scenarioId, 'climb');
+    assert.equal(tr.subs.length, 0, 'демо и автомобиль не смешиваются');
+    assert.equal(ctx.values.dataSource, 'vehicle', 'демо не сохраняется');
+    await ctx.loopFn!();
+    const fr = (kit as ReturnType<typeof fakeKit>).frames.slice(-1)[0] as { badges: { text: string }[] };
+    assert.deepEqual(fr.badges.map((b) => b.text), [T.native.badge.demo]);
+    app.dispose();
+  });
+});
+
 describe('отрисовка: строгая поверхность (только методы Recorder)', () => {
-  it('демо: 5 экранов × 5 сценариев рисуются, вкладки и бейдж ДЕМО', async () => {
+  it('демо разработчика: 5 экранов × 5 сценариев рисуются, вкладки и бейдж ДЕМО', async () => {
     for (const sc of SCENARIO_IDS) {
-      const { ctx, kit, app } = launch({ scenario: sc });
+      const { ctx, kit, app } = launch({}, { dev: demo(sc) });
       const k = kit as ReturnType<typeof fakeKit>;
       const cvs = await drawAll(ctx, app);
       cvs.forEach((cv, p) => {
@@ -62,19 +111,21 @@ describe('отрисовка: строгая поверхность (тольк�
       const fr = k.frames[k.frames.length - 1] as { tabs: string[]; badges: { text: string }[] };
       assert.deepEqual(fr.tabs, [...TAB_LABELS]);
       assert.equal(fr.badges[0].text, 'ДЕМО');
-      // Камеры: в partialLoss левая — смоделированная потеря (кадр не рисуется).
+      // Камеры: левая — передняя (крупно) — правая; в partialLoss левая — смоделированная потеря (кадр не рисуется).
       const cam = cvs[4];
-      assert.ok(cam.images.includes(IMAGE_ID.cameraFront), `${sc}: основной кадр`);
+      assert.ok(cam.images.includes(IMAGE_ID.cameraFront), `${sc}: передняя крупно`);
+      assert.ok(cam.images.includes(IMAGE_ID.thumbRight));
       if (sc === 'partialLoss') assert.ok(!cam.images.includes(IMAGE_ID.thumbLeft) && !cam.images.includes(IMAGE_ID.cameraLeft));
       else assert.ok(cam.images.includes(IMAGE_ID.thumbLeft));
+      assert.equal(cam.texts.filter((x) => x.s === T.native.cameras.demo).length, 3, 'каждый демо-кадр помечен');
       // Рельеф: рендер привода и оба прибора.
       for (const id of [IMAGE_ID.xray, IMAGE_ID.dialPitch, IMAGE_ID.dialRoll]) assert.ok(cvs[0].images.includes(id), `${sc}: image ${id}`);
       app.dispose();
     }
   });
 
-  it('режим чтения: бейдж «нет данных», без демо-снимков камер, затем «частично» после колбэка', async () => {
-    const { ctx, kit, app, tr } = launch({ dataSource: 'vehicle' });
+  it('данные автомобиля: бейджа режима нет ни до, ни после данных; демо-снимков камер нет', async () => {
+    const { ctx, kit, app, tr } = launch();
     const k = kit as ReturnType<typeof fakeKit>;
     await flush();
     const cvs = await drawAll(ctx, app);
@@ -83,120 +134,79 @@ describe('отрисовка: строгая поверхность (тольк�
       for (const id of CAMERA_IDS) assert.ok(!cv.images.includes(id), `vehicle/${p}: демо-кадр камеры ${id}`);
     });
     assert.ok(!k.setImageCalls.some((c) => CAMERA_IDS.includes(c.id as never)), 'кадры камер даже не распакованы');
-    let fr = k.frames[k.frames.length - 1] as { badges: { text: string }[] };
-    assert.equal(fr.badges[0].text, 'НЕТ ДАННЫХ');
+    assert.deepEqual((k.frames[k.frames.length - 1] as { badges: unknown[] }).badges, []);
     tr.feed(CDS, 'statusEngineSpeed2', { actualValueRPMEngineCrankshaft: 3000 });
     await new Promise((r) => setTimeout(r, 150));
     await ctx.loopFn!();
-    fr = k.frames[k.frames.length - 1] as { badges: { text: string }[] };
-    assert.equal(fr.badges[0].text, 'ЧТЕНИЕ');
+    assert.deepEqual((k.frames[k.frames.length - 1] as { badges: unknown[] }).badges, []);
     app.dispose();
   });
 
-  it('кнопки HMI: экраны по кругу; «Пауза» — только демо; «Сброс» — новая сессия в обоих режимах', async () => {
+  it('нижней строки статуса нет: ни текста режима, ни второго таймера сессии; содержимое доходит до низа холста', async () => {
+    for (const dev of [PRODUCTION, demo()]) {
+      const { ctx, app } = launch({}, { dev, own: true });
+      await flush();
+      const cvs = await drawAll(ctx, app);
+      const old = ['АВТОМОБИЛЬ · ТОЛЬКО ЧТЕНИЕ', 'СЦЕНАРИЙ ДЕМО', 'Время сессии', 'Время симуляции'];
+      cvs.forEach((cv, p) => {
+        for (const s of old) assert.ok(!cv.texts.some((x) => x.s.toUpperCase().includes(s.toUpperCase())), `${p}: «${s}»`);
+      });
+      assert.ok(Y1 >= H - 8, `Y1 ${Y1}`);
+      app.dispose();
+    }
+  });
+
+  it('кнопки HMI (запасной путь): только листание по кругу', async () => {
     const { ctx, app } = launch();
+    assert.deepEqual(Object.keys(ctx.clicks).sort(), ['BTN_PAGE', 'BTN_PREV']);
     ctx.clicks.BTN_PREV({});
     assert.equal(app.page(), PAGE_COUNT - 1);
     ctx.clicks.BTN_PAGE({});
     assert.equal(app.page(), 0);
-    assert.equal(ctx.labels.BTN_ACTION, 'Пауза');
-    assert.equal(ctx.enabledState.BTN_ACTION, true);
-    ctx.clicks.BTN_ACTION({});
-    assert.equal(app.model.getState().paused, true);
-    assert.equal(ctx.labels.BTN_ACTION, 'Пуск');
-    ctx.clicks.BTN_ACTION({});
-    assert.equal(app.model.getState().paused, false);
-    let before = app.model.getState().epoch;
-    ctx.clicks.BTN_SESSION({});
-    assert.equal(app.model.getState().epoch, before + 1, 'демо: новая сессия');
-
-    ctx.settings.set('dataSource', 'vehicle');
-    assert.equal(app.model.dataMode, 'vehicle');
-    assert.equal(ctx.labels.BTN_ACTION, 'Пауза');
-    assert.equal(ctx.enabledState.BTN_ACTION, false, 'пауза недоступна в режиме чтения');
-    before = app.model.getState().epoch;
-    ctx.clicks.BTN_ACTION({});
-    assert.equal(app.model.getState().epoch, before, 'действие в режиме чтения ничего не делает');
-    assert.equal(app.model.getState().paused, false);
-    ctx.clicks.BTN_SESSION({});
-    assert.equal(app.model.getState().epoch, before + 1, 'режим чтения: новая сессия');
-    ctx.settings.set('dataSource', 'demo');
-    assert.equal(ctx.enabledState.BTN_ACTION, true);
     app.dispose();
   });
 
-  it('own = false (upstream-диалект, программный путь): без кнопок на странице сессия и камера доступны с панели и из настроек', async () => {
-    const { ctx, app, kit } = launch({}, { own: false });
-    const k = kit as ReturnType<typeof fakeKit>;
+  it('own = false: целей нажатия на страницах нет, G.button не вызывается', async () => {
+    const { ctx, kit } = launch({}, { own: false, dev: demo(null, true) });
     for (let p = 0; p < PAGE_COUNT; p++) {
       ctx.tab!(p);
       await ctx.loopFn!();
       const cv = ctx.shown[ctx.shown.length - 1].cv as ReturnType<typeof strictSurface>;
       assert.equal(cv.counts.target ?? 0, 0, `страница ${p}: целей нажатия нет`);
     }
-    assert.equal(k.buttons.length, 0, 'G.button не вызывается');
-    assert.equal(typeof ctx.clicks.BTN_SESSION, 'function');
-    const before = app.model.getState().epoch;
-    ctx.clicks.BTN_SESSION({});
-    assert.equal(app.model.getState().epoch, before + 1);
-
-    const mainImage = async () => {
-      ctx.tab!(4);
-      await ctx.loopFn!();
-      return (ctx.shown[ctx.shown.length - 1].cv as ReturnType<typeof strictSurface>).images;
-    };
-    let imgs = await mainImage();
-    assert.ok(imgs.includes(IMAGE_ID.cameraFront) && !imgs.includes(IMAGE_ID.cameraRight), 'по умолчанию — передняя');
-    ctx.settings.set('primaryCamera', 'right');
-    imgs = await mainImage();
-    assert.ok(imgs.includes(IMAGE_ID.cameraRight) && imgs.includes(IMAGE_ID.thumbFront) && !imgs.includes(IMAGE_ID.cameraFront));
-    ctx.settings.set('primaryCamera', 'rear');
-    imgs = await mainImage();
-    assert.ok(imgs.includes(IMAGE_ID.cameraRight), 'недопустимое значение игнорируется');
-    app.dispose();
-
-    const saved = launch({ primaryCamera: 'left' }, { own: false });
-    saved.ctx.tab!(4);
-    await saved.ctx.loopFn!();
-    assert.ok((saved.ctx.shown[saved.ctx.shown.length - 1].cv as ReturnType<typeof strictSurface>).images.includes(IMAGE_ID.cameraLeft), 'сохранённый выбор');
-    saved.app.dispose();
-    const bad = launch({ primaryCamera: 42 }, { own: false });
-    bad.ctx.tab!(4);
-    await bad.ctx.loopFn!();
-    assert.ok((bad.ctx.shown[bad.ctx.shown.length - 1].cv as ReturnType<typeof strictSurface>).images.includes(IMAGE_ID.cameraFront));
-    bad.app.dispose();
+    assert.equal((kit as ReturnType<typeof fakeKit>).buttons.length, 0);
   });
 
-  it('own = true: «Показать крупно» меняет ту же настройку primaryCamera; «Основной вид» — не кнопка', async () => {
+  it('own = true, обычный запуск: на страницах только «Сброс» сессии на «Рельефе»; диагностики нет', async () => {
     const { ctx, app, kit } = launch({}, { own: true });
     const k = kit as ReturnType<typeof fakeKit>;
-    ctx.tab!(4);
-    await ctx.loopFn!();
-    assert.deepEqual(Object.keys(k.presses).filter((key) => key.startsWith('cam-')).sort(), ['cam-left', 'cam-right'], 'кнопки только у миниатюр');
-    k.presses['cam-left']();
-    assert.equal(ctx.values.primaryCamera, 'left');
-    await ctx.loopFn!();
-    assert.ok((ctx.shown[ctx.shown.length - 1].cv as ReturnType<typeof strictSurface>).images.includes(IMAGE_ID.cameraLeft));
-    app.dispose();
+    await drawAll(ctx, app);
+    assert.deepEqual(Object.keys(k.presses).sort(), ['session-reset']);
+    const before = app.model.getState().epoch;
+    k.presses['session-reset']();
+    assert.equal(app.model.getState().epoch, before + 1, 'новая сессия касанием');
+    assert.equal(app.openDiagnostics(), false);
+    assert.equal(ctx.sheets.length, 0);
   });
 
-  it('кнопки на странице только когда kit сам ведёт экран', async () => {
-    const own = launch({}, { own: true });
-    await own.ctx.loopFn!();
-    assert.equal((own.kit as ReturnType<typeof fakeKit>).buttons.length, 0, '«Рельеф»: в строке статуса кнопок нет');
-    own.ctx.tab!(4);
-    await own.ctx.loopFn!();
-    assert.equal((own.kit as ReturnType<typeof fakeKit>).buttons.length, 2, '«Камеры»: «Показать крупно» у двух миниатюр');
-    const hmi = launch({}, { own: false });
-    hmi.ctx.tab!(4);
-    await hmi.ctx.loopFn!();
-    assert.equal((hmi.kit as ReturnType<typeof fakeKit>).buttons.length, 0);
-    own.app.dispose();
-    hmi.app.dispose();
+  it('XOP_DEV=diag: кнопка «Диагностика» на «Системах» открывает лист снимка (и рендерера/управления)', async () => {
+    const { ctx, app, kit } = launch({}, { own: true, dev: { ...PRODUCTION, diagnostics: true } });
+    const k = kit as ReturnType<typeof fakeKit>;
+    await flush();
+    ctx.tab!(3);
+    await ctx.loopFn!();
+    assert.ok(k.buttons.includes(DIAG.open));
+    k.presses['dev-diagnostics']();
+    assert.equal(ctx.sheets.length, 1);
+    const sh = ctx.sheets[0] as { title: string; lines: { label: string }[] };
+    assert.equal(sh.title, DIAG.title);
+    assert.ok(sh.lines.some((l) => l.label === 'Контроллер iDrive'));
+    assert.ok(sh.lines.some((l) => l.label === DIAG.services));
+    app.dispose();
   });
 
   it('shutdown от MainApp: цикл остановлен, подписки закрыты', async () => {
-    const { ctx, tr } = launch({ dataSource: 'vehicle' });
+    const { ctx, tr } = launch();
     await flush();
     assert.ok(tr.subs.length > 0);
     ctx.shutdown!();
@@ -206,7 +216,7 @@ describe('отрисовка: строгая поверхность (тольк�
   });
 
   it('id картинок постоянные: многократная отрисовка не плодит новые id', async () => {
-    const { ctx, kit, app } = launch();
+    const { ctx, kit, app } = launch({}, { dev: demo() });
     for (let i = 0; i < 30; i++) {
       ctx.tab!(i % PAGE_COUNT);
       await ctx.loopFn!();
@@ -222,7 +232,7 @@ describe('отрисовка: настоящий Recorder и программн�
     const up = loadUpstream();
     const kit: Kit = { mgu: { run: () => undefined }, G: up.G, record: { setImage: up.record.setImage } };
     for (const mode of ['demo', 'vehicle']) {
-      const { ctx, app } = launch({ dataSource: mode }, { kit, canvas: () => new up.record.Recorder(1600, 520) });
+      const { ctx, app } = launch({}, { kit, canvas: () => new up.record.Recorder(1600, 520), dev: mode === 'demo' ? demo() : PRODUCTION });
       await flush();
       for (let p = 0; p < PAGE_COUNT; p++) {
         ctx.tab!(p);
@@ -239,13 +249,14 @@ describe('отрисовка: настоящий Recorder и программн�
     }
   });
 
-  it('own = true: нижняя строка — только статус, без кнопок (пауза/сессия/сценарий — в «Настройках»)', async () => {
+  it('own = true: на страницах нет целей, кроме «Сброс» сессии (демо и автомобиль)', async () => {
     const up = loadUpstream();
     const kit: Kit = { mgu: { run: () => undefined }, G: up.G, record: { setImage: up.record.setImage } };
     for (const sc of SCENARIO_IDS) {
-      const { ctx, app } = launch({ scenario: sc }, {
+      const { ctx, app } = launch({}, {
         kit,
         canvas: () => Object.assign(new up.record.Recorder(1600, 520), { own: true }) as Surface,
+        dev: demo(sc),
       });
       for (const page of [0, 1, 2, 3, 4]) {
         for (const paused of [false, true]) {
@@ -253,9 +264,7 @@ describe('отрисовка: настоящий Recorder и программн�
           app.model.setPaused(paused);
           await ctx.loopFn!();
           const rec = ctx.shown[ctx.shown.length - 1].cv as unknown as { targets: { y: number; key: string }[] };
-          assert.deepEqual(rec.targets.filter((t) => t.key.startsWith('tb-') || t.y >= BAR_Y - 4).map((t) => t.key), [], `${sc}/${page}: в строке статуса нет кнопок`);
-          // на странице остаются только «Показать крупно» у миниатюр камер
-          assert.ok(rec.targets.every((t) => t.key.startsWith('cam-')), rec.targets.map((t) => t.key).join(','));
+          assert.deepEqual(rec.targets.map((t) => t.key), page === 0 ? ['session-reset'] : [], `${sc}/${page}`);
         }
       }
       app.dispose();

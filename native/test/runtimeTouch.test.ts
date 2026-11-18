@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { after, before, describe, it } from 'node:test';
 import { inputNote, startApp, type AppHandle } from '../src/app';
+import { PRODUCTION, type DevAccess } from '../src/devAccess';
 import { buildManifest } from '../src/manifest';
 import type { Kit } from '../src/platform/kit';
 import type { DisplayApi, MguCtx, Surface } from '../src/platform/kitTypes';
@@ -39,7 +40,7 @@ interface Sheet {
   open: SettingSpec | null;
   rows(): { label: string; value?: string }[];
 }
-interface Display extends DisplayApi {
+interface Display extends Omit<DisplayApi, 'own'> {
   gpu: (DisplayApi['gpu'] & { close(): void; native: boolean; touch: boolean; ready: boolean }) | null;
   place: { x: number; y: number; w: number; h: number; scale: number; ox: number; oy: number; full: boolean } | null;
   sheet: Sheet | null;
@@ -57,7 +58,8 @@ interface Display extends DisplayApi {
   present(name: string, r: Surface, soft: (n: string, c: unknown) => unknown): Promise<unknown>;
   label(id: string, text: string): void;
   hideButton(id: string): void;
-  openSheet(sh: Sheet): boolean;
+  openSheet(sh: object): boolean;
+  pageTargets: (Rect & { key: string })[] | null;
   closeSheet(): void;
 }
 
@@ -94,7 +96,6 @@ interface Rig {
   app: AppHandle;
   settings: Settings;
   hmiVisible: Record<string, boolean>;
-  rows: { label: string; value?: string | (() => string) }[];
   render(): Promise<void>;
   /** Тап по экранной точке (sx, sy): renderer пересчитывает её в логические px по последнему PLACE. */
   tapScreen(sx: number, sy: number): Promise<void>;
@@ -105,7 +106,7 @@ interface Rig {
 
 const center = (r: Rect) => [r.x + r.w / 2, r.y + r.h / 2] as const;
 
-async function rig(opts: { native: boolean; touch?: boolean }): Promise<Rig> {
+async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess }): Promise<Rig> {
   const srv = await FakeRenderer.start({ native: opts.native, touch: opts.touch ?? true, caps: 1 | 8 });
   const saved: Env = { MGU_RENDERD_SOCKET: process.env.MGU_RENDERD_SOCKET, MGU_RENDERD_PROTO: process.env.MGU_RENDERD_PROTO };
   const env: Env = { MGU_RENDERD_SOCKET: srv.path };
@@ -115,7 +116,6 @@ async function rig(opts: { native: boolean; touch?: boolean }): Promise<Rig> {
   const kit = stageVendorKit();
   const record = kit.req('./record.js') as { setImage: Kit['record']['setImage'] };
   const { Display } = kit.req('./display.js') as { Display: new (...a: unknown[]) => Display };
-  const { listSheet } = kit.req('./sheet.js') as { listSheet: (s: Settings, t: null, o: object) => Sheet };
   const G = kit.req('./gauges.js') as Kit['G'];
   const spec = buildManifest() as { id: string; title: string; version: string; screens: { buttons: [string, string][] }[]; settings: SettingSpec[] };
 
@@ -133,14 +133,6 @@ async function rig(opts: { native: boolean; touch?: boolean }): Promise<Rig> {
   const settings = new Settings(spec.settings);
   const log = { info: () => undefined, warn: () => undefined, error: (...a: unknown[]) => console.error('[display]', ...a) };
   const display = new Display(ui, log, spec, settings, () => THEME);
-  const rows: Rig['rows'] = [];
-  // mgu.js wireSettings: BTN_SETTINGS — «Настройки» листом поверх страницы, где kit ведёт экран
-  comps.get('BTN_SETTINGS')!.on('action', () => {
-    if (display.sheet && display.sheet.settings) return display.closeSheet();
-    const sh = listSheet(settings, null, { version: spec.version, extra: () => rows });
-    sh.settings = true;
-    if (!display.openSheet(sh)) hmiVisible.SETTINGS_SCREEN = true;
-  });
 
   let loopFn: (() => unknown) | null = null;
   const ctx: MguCtx = {
@@ -160,12 +152,11 @@ async function rig(opts: { native: boolean; touch?: boolean }): Promise<Rig> {
       return { stop: () => undefined, kick: () => undefined };
     },
     onTab: (fn) => (display.onTab = fn),
-    settingsRow: (row) => rows.push(row),
-    hideButton: (id) => display.hideButton(id),
-    display,
+    sheet: (sh) => display.openSheet(sh),
+    display: display as unknown as DisplayApi,
   };
   let t = 1000;
-  const app = startApp(ctx, { mgu: { run: () => undefined }, G, record }, syntheticAssets(), () => (t += 50));
+  const app = startApp(ctx, { mgu: { run: () => undefined }, G, record }, syntheticAssets(), () => (t += 50), opts.dev ?? PRODUCTION);
   await srv.until(() => !!display.gpu && display.gpu.ready && !!display.place, 'renderer ready + placement');
 
   const lastPlace = () => {
@@ -185,7 +176,6 @@ async function rig(opts: { native: boolean; touch?: boolean }): Promise<Rig> {
     app,
     settings,
     hmiVisible,
-    rows,
     render: async () => {
       await loopFn!();
       await flush();
@@ -269,16 +259,15 @@ describe('mgu-render/1 с касанием, 1920 × 720: kit ведёт экра
     assert.equal(d.place!.full, true);
     assert.deepEqual(d.buttons(), []);
     assert.equal(d.barH(), 0);
-    for (const id of ['BTN_PAGE', 'BTN_PREV', 'BTN_ACTION', 'BTN_SESSION', 'BTN_SETTINGS']) assert.equal(r.hmiVisible[id], false, `${id} скрыта в HMI`);
-    assert.equal(inputNote(d.own(), d), null);
+    for (const id of ['BTN_PAGE', 'BTN_PREV']) assert.equal(r.hmiVisible[id], false, `${id} скрыта в HMI`);
+    assert.equal(inputNote(d.own(), d as unknown as DisplayApi), null);
   });
 
-  it('шапка в кадре рендереру: полосы + «Terrain Monitor» / «xDrive Offroad Pro» целиком, затем 5 вкладок + «Настройки», бейджи — до угла статуса', async () => {
+  it('шапка в кадре рендереру: полосы + «Terrain Monitor» / «xDrive Offroad Pro» целиком, затем 5 вкладок; ни «Настроек», ни бейджа режима', async () => {
     const d = r.display;
     assert.equal(d.brand, HEADER_BRAND);
     const tabs = d.chromeRec!.tabRects;
-    assert.equal(tabs.length, TAB_LABELS.length + 1);
-    assert.equal(d.headBadges, true, 'бейджи в шапке');
+    assert.equal(tabs.length, TAB_LABELS.length, 'вкладки «Настройки» нет');
     assert.ok(d.headEnd <= STATUS_X, `шапка до угла статуса (${d.headEnd})`);
     await r.srv.until(() => r.srv.of(MSG.FRAME).length > 0, 'FRAME');
     assertBrandVisible(r, u32(r.srv.of(MSG.FRAME).slice(-1)[0].payload), 'FRAME');
@@ -323,99 +312,67 @@ describe('mgu-render/1 с касанием, 1920 × 720: kit ведёт экра
     }
   });
 
-  it('«Настройки» — вкладкой: лист настроек; все настройки и действия демо — касанием', async () => {
+  it('обычный запуск: на страницах нет кнопки диагностики, лист не открывается', async () => {
     const d = r.display;
-    const settingsTab = d.chromeRec!.tabRects.find((q) => q.i === TAB_LABELS.length)!;
-    await r.tapScreen(...center(settingsTab));
-    assert.ok(d.sheet && d.sheet.settings, 'лист «Настройки» открыт');
-
-    const tapRow = async (label: string) => {
-      for (let attempt = 0; attempt < 6; attempt++) {
-        const k = d.sheet!.rows().findIndex((x) => x.label === label);
-        assert.ok(k >= 0, `строка «${label}» есть: ${d.sheet!.rows().map((x) => x.label).join(' | ')}`);
-        const tgt = (d.sheetTargets || []).find((q) => q.i === k);
-        if (tgt) return r.tapLogical(...center(tgt));
-        // строка вне видимой части: протянуть список пальцем (вверх — к строкам ниже, вниз — к строкам выше)
-        const list = (d.sheetTargets || []).filter((q) => q.i !== undefined);
-        const below = k > Math.max(...list.map((q) => q.i!));
-        const [x, y] = center(list[below ? list.length - 1 : 0]);
-        const dir = below ? -1 : 1;
-        r.srv.touch(1, x, y);
-        for (let s = 1; s <= 5; s++) r.srv.touch(2, x, y + dir * s * 40);
-        r.srv.touch(3, x, y + dir * 200);
-        await new Promise((ok) => setTimeout(ok, 60));
-      }
-      assert.fail(`строка «${label}» не достижима касанием`);
-    };
-
-    // пауза демо — строкой «Демо»
-    assert.equal(r.app.model.getState().paused, false);
-    await tapRow(T.native.rows.demo);
-    assert.equal(r.app.model.getState().paused, true, 'пауза касанием');
-    await tapRow(T.native.rows.demo);
-    assert.equal(r.app.model.getState().paused, false, 'продолжить касанием');
-
-    // новая сессия
-    let sessions = 0;
-    const orig = r.app.model.newSession.bind(r.app.model);
-    r.app.model.newSession = () => (sessions++, orig());
-    await tapRow(T.native.rows.newSession);
-    assert.equal(sessions, 1, 'новая сессия касанием');
-
-    // выбор: сценарий и основная камера (списки значений — тоже касанием)
-    const pick = async (key: string, value: string) => {
-      const s = r.settings.schema.find((x) => x.key === key)!;
-      await tapRow(s.label);
-      assert.equal(d.sheet!.open && d.sheet!.open.key, key, `список «${s.label}» открыт`);
-      await tapRow(s.options!.find((o) => o[0] === value)![1]);
-      assert.equal(r.settings.get(key), value);
-    };
-    await pick('scenario', 'hdcDescent');
-    assert.equal(r.app.model.getState().scenarioId, 'hdcDescent');
-    await pick('primaryCamera', 'left');
-    for (const key of ['dataSource', 'layout', 'renderer']) {
-      await tapRow(r.settings.schema.find((x) => x.key === key)!.label);
-      assert.equal(d.sheet!.open && d.sheet!.open.key, key, `${key}: список значений открывается касанием`);
-      const back = d.sheetTargets![0];
-      await r.tapLogical(...center(back)); // «Назад» (без выбора)
-      assert.equal(d.sheet!.open, null);
+    for (const i of [0, 1, 2, 3, 4]) {
+      r.app.setPage(i);
+      await r.render();
+      assert.ok(!(d.pageTargets || []).some((q) => q.key === 'dev-diagnostics'), `страница ${i}`);
     }
-    assert.ok(d.sheet!.rows().some((x) => x.label === T.native.rows.input && x.value === T.native.rows.inputTouch), 'строка «Управление: касание»');
+    assert.equal(r.app.openDiagnostics(), false);
+    assert.equal(d.sheet, null);
+    r.app.setPage(0);
+    await r.render();
+  });
 
-    // диагностика чтения: лист внутри настроек касанием (в демо — пояснение), «Назад» — обратно к настройкам
-    await tapRow(DIAG.row);
-    const child = (d.sheet as unknown as { child: { title: string; lines: { label: string }[] } | null }).child;
-    assert.ok(child && child.title === DIAG.title, 'лист диагностики открыт');
-    assert.deepEqual(child!.lines.map((l) => l.label), [DIAG.demo]);
+  it('ширина шапки: знак и 5 вкладок без бейджа, до угла статуса', async () => {
+    const d = r.display;
+    await r.render();
+    assert.equal(d.chromeRec!.tabRects.length, TAB_LABELS.length);
+    assert.ok(d.headEnd <= STATUS_X);
+    assertBrandVisible(r, d.chromeRec!.words(), 'автомобиль');
+  });
+});
+
+describe('XOP_DEV=demo,diag: демо помечено, лист диагностики касанием', () => {
+  let r: Rig;
+  before(async () => {
+    r = await rig({ native: true, dev: { demo: true, scenario: null, diagnostics: true } });
+    await r.render();
+  });
+  after(() => r.close());
+
+  it('бейджи ДЕМО (+ ПАУЗА) помещаются в шапку со знаком и 5 вкладками', async () => {
+    const d = r.display;
+    for (const paused of [false, true]) {
+      r.app.model.setPaused(paused);
+      await r.render();
+      assert.equal(d.headBadges, true, `бейджи в шапке (пауза ${paused})`);
+      assert.ok(d.headEnd <= STATUS_X);
+      assertBrandVisible(r, d.chromeRec!.words(), 'демо');
+    }
+    r.app.model.setPaused(false);
+  });
+
+  it('«Системы» → кнопка «Диагностика» → лист; «Назад» закрывает; вкладка над листом — к странице', async () => {
+    const d = r.display;
+    r.app.setPage(3);
+    await r.render();
+    const btn = (d.pageTargets || []).find((q) => q.key === 'dev-diagnostics');
+    assert.ok(btn, 'кнопка есть');
+    await r.tapLogical(...center(btn!));
+    const sh = d.sheet as unknown as { title: string; lines: { label: string }[] } | null;
+    assert.ok(sh && sh.title === DIAG.title, 'лист открыт');
+    assert.deepEqual(sh!.lines.map((l) => l.label).slice(-1), [DIAG.demo], 'в демо снимка чтения нет');
     await r.tapLogical(...center(d.sheetTargets![0]));
-    assert.equal((d.sheet as unknown as { child: unknown }).child, null, '«Назад» — к настройкам');
-    assert.ok(d.sheet && d.sheet.settings);
-
-    // вкладка поверх листа закрывает его и открывает страницу
+    assert.equal(d.sheet, null, '«Назад» закрыл');
+    await r.tapLogical(...center(btn!));
+    assert.ok(d.sheet);
     const camTab = d.chromeRec!.tabRects.find((q) => q.i === 4)!;
     await r.tapScreen(...center(camTab));
     assert.equal(d.sheet, null);
     assert.equal(r.app.page(), 4);
     await r.render();
-  });
-
-  it('ширина шапки: все бейджи режимов (ДЕМО+ПАУЗА, ЧТЕНИЕ…) — 6 вкладок и знак помещаются', async () => {
-    const d = r.display;
-    const check = async (what: string) => {
-      await r.render();
-      const tabs = d.chromeRec!.tabRects;
-      assert.equal(tabs.length, TAB_LABELS.length + 1, `${what}: все вкладки`);
-      assert.equal(d.headBadges, true, `${what}: бейджи остались в шапке`);
-      assert.ok(d.headEnd <= STATUS_X, `${what}: до угла статуса`);
-      assertBrandVisible(r, d.chromeRec!.words(), what);
-    };
-    r.app.model.togglePause();
-    await check('ДЕМО + ПАУЗА');
-    r.app.model.togglePause();
-    r.settings.set('dataSource', 'vehicle');
-    await check(T.native.badge.vehicleNoData);
-    r.settings.set('dataSource', 'demo');
-    await check('ДЕМО');
   });
 });
 
@@ -427,12 +384,12 @@ describe('запасной путь: рендерер без mgu-render/1 (то�
   });
   after(() => r.close());
 
-  it('kit не ведёт экран: панель HMI (5 кнопок) остаётся, статус объясняет, почему касания нет', () => {
+  it('kit не ведёт экран: панель HMI «Далее»/«Назад» остаётся; причина — в журнал (inputNote)', () => {
     const d = r.display;
     assert.equal(d.gpu!.native, false);
     assert.equal(d.own(), false);
-    assert.equal(d.buttons().length, 5, 'листание, пауза, сброс, настройки — кнопками HMI');
-    assert.equal(inputNote(d.own(), d), T.native.input.upstream);
+    assert.deepEqual(d.buttons().map((b) => b.id), ['BTN_PAGE', 'BTN_PREV'], 'листание кнопками HMI');
+    assert.equal(inputNote(d.own(), d as unknown as DisplayApi), T.native.input.upstream);
   });
 
   it('шапка полноэкранной раскладки и здесь с брендом целиком и всеми вкладками', async () => {
@@ -467,7 +424,7 @@ describe('программный путь / стандартная раскла�
     try {
       const { Recorder } = kit.req('./record.js') as { Recorder: RecorderCtor };
       const G = kit.req('./gauges.js') as Kit['G'];
-      for (const badges of [[{ text: T.native.badge.demo }, { text: T.native.badge.paused }], [{ text: T.native.badge.vehicleNoData }]]) {
+      for (const badges of [[{ text: T.native.badge.demo }, { text: T.native.badge.paused }], []]) {
         const cv = new Recorder(1600, 520);
         G.frame(cv, THEME, TAB_LABELS, 0, badges);
         const before = cv.words().length;

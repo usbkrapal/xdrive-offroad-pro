@@ -6,18 +6,21 @@ import { altitudeChangeFromStart, sessionElapsedMs, type Extremum } from '../../
 import { usableNumber, usableValue } from '../../../src/domain/signal';
 import { SUSPENSION_LEVELS, WHEELS, type Signal, type SignalMap, type Wheel } from '../../../src/domain/types';
 import { gearText } from '../../../src/components/displayHelpers';
-import { cameraLayout, type CameraId, type CameraView } from '../../../src/screens/cameraPresentation';
+import { cameraAvailability, type CameraId } from '../../../src/screens/cameraPresentation';
 import type { ImageRegistry, CameraKey } from '../assets/registry';
 import { DIAL_K } from '../assets/spec';
 import { formatDuration, formatNumber, NONE, presentSource, shownNumber, shownSignal, type Shown } from '../format';
 import { asDomain, type NativeState } from '../model/model';
+import type { ExtraSignal } from '../vehicle/adapter';
+import { FES_MODES } from '../vehicle/uds/records';
 import type { Layer, Surface } from '../platform/kitTypes';
 import { T } from '../strings';
 import { BEZEL, drawDialLive, drawDialStatic, FACE, vehicleRotation, type DialKind, type DialTexture } from './dial';
 import { drawDrivetrain, IMG_H, IMG_W, type Phases } from './drivetrain';
-import { CAMERA_MAIN, CAMERA_THUMB, DIAL_R, GAP, M, TERRAIN, TOPDOWN_H_SUSPENSION, TOPDOWN_H_SYSTEMS, W, XRAY_H_TERRAIN, XRAY_H_TRACTION, Y0, Y1 } from './layout';
+import { CAMERA_LABEL_H, CAMERA_MAIN, CAMERA_THUMB, DIAL_R, GAP, M, TERRAIN, TOPDOWN_H_SUSPENSION, TOPDOWN_H_SYSTEMS, W, XRAY_H_TERRAIN, XRAY_H_TRACTION, Y0, Y1 } from './layout';
 import { C, withA } from './palette';
-import { bar, caps, chip, hline, panel, readout, statusTag, text, width } from './ui';
+import { DIAG } from './diagnostics';
+import { bar, caps, chip, hline, panel, readout, statusTag, text } from './ui';
 
 export interface PageEnv {
   readonly cv: Surface;
@@ -28,22 +31,32 @@ export interface PageEnv {
   /** G.layer: статичная часть рисуется один раз и кэшируется (на GPU — текстурой). */
   readonly layer: (key: string, w: number, h: number, draw: (c: Surface) => void) => Layer;
   readonly nowMs: number;
-  readonly primaryCamera: CameraId;
   /** Кнопка на странице (только когда kit сам ведёт экран); иначе null. */
   readonly button: ((x: number, y: number, w: number, h: number, label: string, run: () => unknown, key: string, primary?: boolean) => number) | null;
-  readonly selectCamera: (id: CameraId) => void;
+  /** Новая сессия (кнопка «Сброс» в панели сессии «Рельефа»). */
+  readonly newSession: () => void;
+  /** Лист диагностики чтения — только доступ разработчика (XOP_DEV=diag); иначе null и кнопки нет. */
+  readonly openDiagnostics: (() => unknown) | null;
+  /**
+   * Живой вид камеры в прямоугольнике (видео рендерера, op 19): true — нарисован (кадры идут прямо сейчас);
+   * false — источника нет / кадры не свежие / рендерер без видео, тогда страница рисует «Недоступно».
+   */
+  readonly liveCamera: ((id: CameraId, x: number, y: number, w: number, h: number) => boolean) | null;
 }
 
 const t = T;
 const deg = t.units.deg;
 const HEIGHT_RANGE_MM = 120;
 
+/** Величина вне домена (state.snapshot.extra) → показ: только свежая допустимая — числом. */
+const shownExtra = (e: ExtraSignal, d: number, signed = false): Shown =>
+  e.quality === 'valid' && e.value !== null && Number.isFinite(e.value) ? { text: formatNumber(e.value, d, signed), quality: 'valid', ok: true } : { text: '—', quality: e.quality === 'valid' ? 'invalid' : e.quality, ok: false };
+/** Код состояния (UDS) → подпись по таблице; код вне таблицы — «—» как недопустимое. */
+const shownCode = (e: ExtraSignal, table: Readonly<Record<number, string>>): Shown =>
+  e.quality === 'valid' && e.value !== null && table[e.value] !== undefined ? { text: table[e.value], quality: 'valid', ok: true } : { text: '—', quality: e.quality === 'valid' ? 'invalid' : e.quality, ok: false };
+const usableExtra = (e: ExtraSignal): number | null => (e.quality === 'valid' && e.value !== null && Number.isFinite(e.value) ? e.value : null);
+
 const extremum = (e: Extremum | null, d: number, signed = false): Shown => (e === null ? NONE : { text: formatNumber(e.value, d, signed), quality: 'valid', ok: true });
-/** Подпись источника только при наличии значения (presentSource); иначе null. */
-const sourceLabel = (s: Signal<unknown>): string | null => {
-  const src = presentSource(s);
-  return src === null ? null : t.source[src];
-};
 
 /* ============================== Рельеф ============================== */
 
@@ -72,11 +85,24 @@ function dialPanel(env: PageEnv, kind: DialKind, x: number, y: number, w: number
     size: 'lg',
     hint: kind === 'pitch' ? t.attitude.pitchHint : t.attitude.rollHint,
   });
+  // Автомобиль: тангаж кузова ОТНОСИТЕЛЬНО ОСЕЙ (корректор фар, датчики высоты) — другая величина, отдельной строкой
+  if (kind === 'pitch' && state.mode === 'vehicle') {
+    const e = state.snapshot.extra.pitchVsAxlesDeg;
+    if (e.quality !== 'unavailable')
+      readout(cv, x + 220, y + h - 64, { label: t.native.extra.pitchVsAxles, shown: shownExtra(e, 1, true), unit: deg, size: 'sm' });
+  }
 }
 
+/**
+ * Последний пригодный угол руля: без свежего пригодного значения (устарело, одиночный недопустимый отсчёт) значок
+ * остаётся в последнем положении приглушённым, а не прыгает в 0° (это выглядело бы как рывок руля к центру).
+ */
+let lastSteerDeg: number | null = null;
 function steeringWheel(cv: Surface, cx: number, cy: number, value: number | null): void {
   const r = 30;
-  const rot = ((value === null ? 0 : -value) * Math.PI) / 180;
+  if (value !== null) lastSteerDeg = value;
+  const shown = value ?? lastSteerDeg;
+  const rot = ((shown === null ? 0 : -shown) * Math.PI) / 180;
   const ok = value !== null;
   const col = ok ? '#c9d3e1' : withA('#8a95a6', 0.4);
   cv.arc(cx, cy, r - 2.5, r + 2.5, 0, 360, col);
@@ -152,6 +178,8 @@ export function terrainPage(env: PageEnv): void {
   const sw = W - M - sx2;
   panel(cv, sx2, by, sw, bh);
   caps(cv, t.terrain.sessionTitle, sx2 + 16, by + 24, 12, C.dim);
+  // Сброс сессии — касанием (где kit ведёт экран); над строкой показателей, справа
+  if (env.button) env.button(sx2 + sw - 16 - 112, by + 6, 112, 26, t.native.buttons.newSession, env.newSession, 'session-reset');
   const ses = state.session;
   const alt = ses.minAltitude && ses.maxAltitude ? { text: `${formatNumber(ses.minAltitude.value, 0)} / ${formatNumber(ses.maxAltitude.value, 0)}`, quality: 'valid' as const, ok: true } : NONE;
   const slip = ses.maxSlipOverall;
@@ -187,8 +215,17 @@ function wheelCard(env: PageEnv, w: Wheel, x: number, y: number, cw: number, ch:
   panel(cv, x, y, cw, ch, braking ? { topLine: C.warn } : {});
   wheelHead(cv, w, x + 16, y + 34);
   readout(cv, x + 16, y + 58, { label: t.traction.wheelSpeed, shown: shownNumber(s[`wheelSpeed.${w}`], 1), unit: t.units.km_h, size: 'md' });
-  const slip = usableNumber(s[`wheelSlip.${w}`]);
-  readout(cv, x + cw / 2 + 4, y + 58, { label: t.traction.slip, shown: shownNumber(s[`wheelSlip.${w}`], 0), unit: t.units.percent, size: 'md' });
+  // Автомобиль: отклонение колеса от опорной скорости DSC (оценка; физического проскальзывания источник не даёт)
+  const veh = env.state.mode === 'vehicle';
+  const delta = env.state.snapshot.extra[`wheelDelta.${w}`];
+  const dv = veh ? usableExtra(delta) : null;
+  const slip = veh ? (dv === null ? null : Math.abs(dv)) : usableNumber(s[`wheelSlip.${w}`]);
+  readout(cv, x + cw / 2 + 4, y + 58, {
+    label: veh ? t.native.extra.wheelDelta : t.traction.slip,
+    shown: veh ? shownExtra(delta, 0, true) : shownNumber(s[`wheelSlip.${w}`], 0),
+    unit: t.units.percent,
+    size: 'md',
+  });
   bar(cv, x + cw / 2 + 4, y + 120, cw / 2 - 20, slip, 0, 100, (slip ?? 0) >= 30 ? C.warn : C.ice);
   hline(cv, x + 16, y + ch - 50, cw - 32);
   text(cv, t.traction.brakeIntervention, x + 16, y + ch - 30, 14, C.dim);
@@ -223,13 +260,10 @@ export function tractionPage(env: PageEnv): void {
   }
   readout(cv, x1 + 16, Y0 + 186, { label: t.traction.frontTorque, shown: shownNumber(s['xdrive.frontTorqueNm'], 0), unit: t.units.nm, size: 'lg' });
   readout(cv, x1 + 16, Y0 + 268, { label: t.traction.rearTorque, shown: shownNumber(s['xdrive.rearTorqueNm'], 0), unit: t.units.nm, size: 'lg' });
-  const srcY = Y0 + h - 18;
-  const sl = text(cv, t.traction.splitSource, x1 + 16, srcY, 14, C.dim);
-  const rearSrc = sourceLabel(s['xdrive.rearPercent']);
-  chip(cv, rearSrc ?? t.native.noSource, x1 + 26 + sl, srcY, rearSrc === null ? C.dim : state.mode === 'demo' ? C.warn : C.cold);
-  // передняя доля, выведенная из задней, помечается отдельно, строкой выше (в демо обе — «Демо»)
-  if (rearSrc !== null && presentSource(s['xdrive.frontPercent']) === 'estimated' && presentSource(s['xdrive.rearPercent']) !== 'estimated') {
-    chip(cv, t.native.frontDerived, x1 + 16, srcY - 28, C.dim);
+  // Передняя доля, выведенная из задней (100 − задняя), — это другая величина, чем измеренная: помечается.
+  // Источники полей — в журнале и листе диагностики, не на экране.
+  if (presentSource(s['xdrive.rearPercent']) === 'measured' && presentSource(s['xdrive.frontPercent']) === 'estimated') {
+    chip(cv, t.native.frontDerived, x1 + 16, Y0 + h - 18, C.dim);
   }
 
   // Колёса вокруг компактной схемы привода.
@@ -252,8 +286,15 @@ export function tractionPage(env: PageEnv): void {
   const w3 = W - M - x3;
   const dh = 118;
   panel(cv, x3, Y0, w3, dh, { title: t.traction.diff });
-  readout(cv, x3 + 16, Y0 + 42, { label: t.traction.diffState, shown: shownSignal(s['rearDiff.lockState'], (v) => t.diffLock[v]), size: 'md' });
-  readout(cv, x3 + w3 - 16, Y0 + 42, { label: t.traction.diffPercent, shown: shownNumber(s['rearDiff.lockPercent'], 0), unit: t.units.percent, size: 'md', align: 'right' });
+  if (state.mode === 'vehicle') {
+    // GHAS: момент блокировки по чтению (статус, не доказанный факт) и заданный, Н·м; степени в % источник не даёт
+    const ex = state.snapshot.extra;
+    readout(cv, x3 + 16, Y0 + 42, { label: t.native.extra.lockTorque, shown: shownExtra(ex['rearLock.torqueNm'], 0), unit: t.units.nm, size: 'md' });
+    readout(cv, x3 + w3 - 16, Y0 + 42, { label: t.native.extra.lockTarget, shown: shownExtra(ex['rearLock.targetNm'], 0), unit: t.units.nm, size: 'md', align: 'right' });
+  } else {
+    readout(cv, x3 + 16, Y0 + 42, { label: t.traction.diffState, shown: shownSignal(s['rearDiff.lockState'], (v) => t.diffLock[v]), size: 'md' });
+    readout(cv, x3 + w3 - 16, Y0 + 42, { label: t.traction.diffPercent, shown: shownNumber(s['rearDiff.lockPercent'], 0), unit: t.units.percent, size: 'md', align: 'right' });
+  }
   const ky = Y0 + dh + GAP;
   panel(cv, x3, ky, w3, h - dh - GAP, { title: t.traction.keyMetrics });
   const half = (w3 - 32) / 2;
@@ -278,6 +319,14 @@ export function tractionPage(env: PageEnv): void {
     const lw = text(cv, t.wheels[w].short, px, py, 16, C.ice);
     text(cv, d.ok ? `${d.text} ${t.units.percent}` : d.text, px + lw + 8, py, 16, C.text);
   });
+  // Давление тормозной системы по контурам (DSC), не вмешательство по колёсам
+  const ex = state.snapshot.extra;
+  // IB_G05: ГТЦ и система; DSC_G30N: контуры 1/2 — что ответил опознанный вариант
+  const ib = ex['brakePressure.tmc'].quality !== 'unavailable' || ex['brakePressure.system'].quality !== 'unavailable';
+  const c1 = shownExtra(ex[ib ? 'brakePressure.tmc' : 'brakePressure.circuit1'], 1);
+  const c2 = shownExtra(ex[ib ? 'brakePressure.system' : 'brakePressure.circuit2'], 1);
+  readout(cv, x3 + 16, my + 84, { label: ib ? t.native.extra.brakeTmc : t.native.extra.brakeCircuit1, shown: c1, unit: t.units.bar, size: 'sm' });
+  readout(cv, x3 + 16 + half, my + 84, { label: ib ? t.native.extra.brakeSystem : t.native.extra.brakeCircuit2, shown: c2, unit: t.units.bar, size: 'sm' });
 }
 
 /* ============================== Подвеска ============================== */
@@ -299,6 +348,8 @@ function cornerCard(env: PageEnv, w: Wheel, x: number, y: number, cw: number, ch
   wheelHead(cv, w, x + 16, y + 34);
   readout(cv, x + 16, y + ch / 2 - 30, { label: t.suspension.cornerLabel, shown: shownNumber(s[`suspensionHeight.${w}`], 0, true), unit: t.units.mm, size: 'lg' });
   heightBar(cv, x + cw - 40, y + 50, ch - 80, usableNumber(s[`suspensionHeight.${w}`]));
+  // Выход датчика высоты VDP в мм — абсолютная величина датчика, не отклонение от нормального уровня
+  readout(cv, x + 16, y + ch - 62, { label: t.native.extra.rideHeightSensor, shown: shownExtra(env.state.snapshot.extra[`rideHeightSensor.${w}`], 0), unit: t.units.mm, size: 'sm' });
 }
 
 /** Схема сверху (topdown-schematic-v2.png): 887 × 1774, центры шин и пружин как в TopDownCar. */
@@ -447,13 +498,30 @@ export function systemsPage(env: PageEnv): void {
   const w2 = 380;
   const ah = 150;
   panel(cv, x2, Y0, w2, ah, { title: t.systems.assists });
-  text(cv, t.systems.assistsNote, x2 + w2 - 16, Y0 + 30, 12, C.dim, { align: 'right' });
   const hdcActive = usableValue(s['hdc.status']) === 'active';
   const onOff = (v: boolean) => (v ? t.onOff.on : t.onOff.off);
-  readout(cv, x2 + 16, Y0 + 40, { label: t.systems.hdc, shown: shownSignal(s['hdc.status'], (v) => t.hdc[v]), size: 'sm', valueColor: hdcActive ? C.cold : undefined });
-  readout(cv, x2 + w2 / 2, Y0 + 40, { label: t.systems.hdcSet, shown: shownNumber(s['hdc.setSpeedKmh'], 0), unit: t.units.km_h, size: 'sm' });
-  readout(cv, x2 + 16, Y0 + 92, { label: t.systems.dsc, shown: shownSignal(s['dsc.status'], onOff), size: 'sm' });
-  readout(cv, x2 + w2 / 2, Y0 + 92, { label: t.systems.dtc, shown: shownSignal(s['dtc.status'], onOff), size: 'sm' });
+  if (state.mode === 'vehicle') {
+    // UDS DSC/IB и BDC: доступность HDC (не «работает»), состояние стабилизации, DTC из FDR+ASC, режим движения
+    const ex = state.snapshot.extra;
+    const xt = t.native.extra;
+    const fdr = usableExtra(ex['dsc.fdr']);
+    const asc = usableExtra(ex['dsc.asc']);
+    const dtc: Shown =
+      fdr === 3 && (asc === 3 || asc === 4)
+        ? { text: xt.dtc.on, quality: 'valid', ok: true }
+        : fdr === 1 && asc !== null && asc <= 2
+          ? { text: xt.dtc.off, quality: 'valid', ok: true }
+          : { text: '—', quality: fdr === null ? shownExtra(ex['dsc.fdr'], 0).quality : 'invalid', ok: false };
+    readout(cv, x2 + 16, Y0 + 40, { label: xt.hdcAvailable, shown: shownCode(ex['hdc.available'], xt.hdc), size: 'sm' });
+    readout(cv, x2 + w2 / 2, Y0 + 40, { label: xt.driveMode, shown: shownCode(ex.driveMode, FES_MODES), size: 'sm' });
+    readout(cv, x2 + 16, Y0 + 92, { label: xt.dscFdr, shown: shownCode(ex['dsc.fdr'], xt.fdr), size: 'sm' });
+    readout(cv, x2 + w2 / 2, Y0 + 92, { label: xt.dtcDerived, shown: dtc, size: 'sm' });
+  } else {
+    readout(cv, x2 + 16, Y0 + 40, { label: t.systems.hdc, shown: shownSignal(s['hdc.status'], (v) => t.hdc[v]), size: 'sm', valueColor: hdcActive ? C.cold : undefined });
+    readout(cv, x2 + w2 / 2, Y0 + 40, { label: t.systems.hdcSet, shown: shownNumber(s['hdc.setSpeedKmh'], 0), unit: t.units.km_h, size: 'sm' });
+    readout(cv, x2 + 16, Y0 + 92, { label: t.systems.dsc, shown: shownSignal(s['dsc.status'], onOff), size: 'sm' });
+    readout(cv, x2 + w2 / 2, Y0 + 92, { label: t.systems.dtc, shown: shownSignal(s['dtc.status'], onOff), size: 'sm' });
+  }
   const ty = Y0 + ah + GAP;
   panel(cv, x2, ty, w2, h - ah - GAP, { title: t.systems.temps });
   tempRow(cv, x2 + 16, ty + 38, w2 - 32, t.systems.gearbox, s['temperature.gearboxC'], ses.maxGearboxTemp);
@@ -476,7 +544,7 @@ export function systemsPage(env: PageEnv): void {
     const sw = text(cv, t.wheels[w].short, hx, y, 18, C.text, { align: al });
     if (!right) text(cv, t.wheels[w].code, hx + sw + 6, y, 12, C.dim);
     else text(cv, t.wheels[w].code, hx - sw - 6, y, 12, C.dim, { align: 'right' });
-    readout(cv, x, y + 8, { label: t.systems.pressure, shown: shownNumber(s[`tyrePressure.${w}`], 2), unit: t.units.bar, size: 'sm', align: al });
+    readout(cv, x, y + 8, { label: t.systems.pressure, shown: shownNumber(s[`tyrePressure.${w}`], 1), unit: t.units.bar, size: 'sm', align: al });
     readout(cv, x, y + 66, { label: t.systems.tyreTemp, shown: shownNumber(s[`tyreTemperature.${w}`], 0), unit: t.units.celsius, size: 'sm', align: al });
   };
   tyre('FL', x3 + 16, Y0 + 70, false);
@@ -506,37 +574,43 @@ export function systemsPage(env: PageEnv): void {
   readout(cv, x4 + 16, Y0 + 222, { label: t.systems.longG, shown: shownNumber(s['acceleration.longG'], 2, true), unit: t.units.g, size: 'md' });
   readout(cv, x4 + 16, Y0 + 288, { label: t.systems.latG, shown: shownNumber(s['acceleration.latG'], 2, true), unit: t.units.g, size: 'md' });
   readout(cv, x4 + 16, Y0 + 354, { label: t.systems.yaw, shown: shownNumber(s.yawRateDegS, 1, true), unit: t.units.deg_s, size: 'md' });
+  // Только доступ разработчика: лист снимка чтения (в обычном запуске кнопки нет)
+  if (env.button && env.openDiagnostics) env.button(x4 + 16, Y1 - 40, w4 - 32, 30, DIAG.open, env.openDiagnostics, 'dev-diagnostics');
 }
 
 /* ============================== Камеры ============================== */
 
 const CAM_KEY: Record<CameraId, CameraKey> = { front: 'cameraFront', left: 'cameraLeft', right: 'cameraRight' };
+/** Порядок как на машине: левая — передняя (крупно) — правая. */
+const CAM_ROW: readonly CameraId[] = ['left', 'front', 'right'];
 
-/** Заглушка вместо кадра: никакой демо-картинки как «живой» камеры. */
+/** Заглушка вместо кадра: одна короткая подпись; никакой демо-картинки как «живой» камеры. */
 function cameraPlaceholder(cv: Surface, x: number, y: number, w: number, h: number, label: string, color: string): void {
   cv.fillRect(x, y, w, h, '#07090d');
   cv.strokeRoundRect(x, y, w, h, 2, 1, withA('#8a95a6', 0.35));
-  for (let k = 0; k < w + h; k += 22) {
-    const x0 = x + Math.max(0, k - h);
-    const y0 = y + Math.min(h, k);
-    const x1 = x + Math.min(w, k);
-    const y1 = y + Math.max(0, k - w);
-    cv.line(x0, y0, x1, y1, 1, withA('#8a95a6', 0.08));
-  }
   text(cv, label, x + w / 2, y + h / 2 + 6, 16, color, { align: 'center' });
 }
 
-function cameraFrame(env: PageEnv, view: CameraView, x: number, y: number, w: number, h: number, primary: boolean): void {
+/**
+ * Кадр одной камеры. Данные автомобиля: живого изображения в приложении нет — заглушка «Видео не подключено»
+ * (без демо-снимков). Демо разработчика: локальный снимок с пометкой ДЕМО или смоделированная потеря.
+ */
+function cameraFrame(env: PageEnv, id: CameraId, x: number, y: number, w: number, h: number, large: boolean): void {
   const { cv, state } = env;
   if (state.mode !== 'demo') {
-    cameraPlaceholder(cv, x, y, w, h, t.native.cameras.vehicleNoFeed, C.dim);
+    // тёмная подложка под видео (op 19 рисует кадр с сохранением пропорций по центру прямоугольника)
+    if (env.liveCamera) {
+      cv.fillRect(x, y, w, h, '#000000');
+      if (env.liveCamera(id, x, y, w, h)) return;
+    }
+    cameraPlaceholder(cv, x, y, w, h, t.native.cameras.noFeed, C.dim);
     return;
   }
-  if (view.availability === 'simulatedLoss') {
-    cameraPlaceholder(cv, x, y, w, h, t.cameras.simulatedLoss, C.warn);
+  if (cameraAvailability(state.scenarioId, id) === 'simulatedLoss') {
+    cameraPlaceholder(cv, x, y, w, h, t.cameras.unavailable, C.warn);
     return;
   }
-  const img = primary ? env.images.image(CAM_KEY[view.id]) : env.images.thumb(CAM_KEY[view.id]);
+  const img = large ? env.images.image(CAM_KEY[id]) : env.images.thumb(CAM_KEY[id]);
   if (!img) {
     cameraPlaceholder(cv, x, y, w, h, t.cameras.loadError, C.red);
     return;
@@ -544,43 +618,22 @@ function cameraFrame(env: PageEnv, view: CameraView, x: number, y: number, w: nu
   cv.image(img.id, x, y, w, h);
 }
 
-function cameraHeader(cv: Surface, x: number, y: number, view: CameraView, demo: boolean): void {
-  text(cv, t.cameras.names[view.id], x, y + 20, 17, C.text);
-  if (demo) text(cv, view.availability === 'simulatedLoss' ? t.cameras.unavailable : t.cameras.demoLabel, x, y + 40, 13, C.warn);
-  else text(cv, t.native.cameras.vehicleStatus, x, y + 40, 13, C.dim);
-}
-
 export function camerasPage(env: PageEnv): void {
   const { cv, state } = env;
   const demo = state.mode === 'demo';
-  const layout = cameraLayout(env.primaryCamera, state.scenarioId);
-  const h = Y1 - Y0;
-  const pw = CAMERA_MAIN.w + 32;
-  panel(cv, M, Y0, pw, h);
-  cameraHeader(cv, M + 16, Y0 + 4, layout.primary, demo);
-  const pl = width(cv, t.cameras.primary, 14) + 14;
-  chip(cv, t.cameras.primary, M + pw - 16 - pl, Y0 + 30, C.ice);
-  cameraFrame(env, layout.primary, M + 16, Y1 - 12 - CAMERA_MAIN.h, CAMERA_MAIN.w, CAMERA_MAIN.h, true);
-
-  const x2 = M + pw + GAP;
-  const w2 = W - M - x2;
-  const sh = (h - GAP) / 2;
-  layout.secondary.forEach((v, i) => {
-    const y = Y0 + i * (sh + GAP);
-    panel(cv, x2, y, w2, sh);
-    const iy = y + (sh - CAMERA_THUMB.h) / 2;
-    cameraFrame(env, v, x2 + 16, iy, CAMERA_THUMB.w, CAMERA_THUMB.h, false);
-    const tx = x2 + 16 + CAMERA_THUMB.w + 20;
-    cameraHeader(cv, tx, iy - 4, v, demo);
-    // «Показать крупно» — только у демо-снимков: в режиме автомобиля изображения нет ни у одной камеры
-    if (env.button && demo) env.button(tx, iy + 52, 210, 34, t.native.buttons.showLarge, () => env.selectCamera(v.id), `cam-${v.id}`);
-    // Пояснение — в нижней части второй панели, по предложениям.
-    if (i === layout.secondary.length - 1) {
-      const note = demo ? t.native.cameras.demoNote : t.native.cameras.vehicleNote;
-      const parts = note.split('. ');
-      parts.forEach((p, k) => text(cv, k < parts.length - 1 ? `${p}.` : p, tx, iy + CAMERA_THUMB.h - (parts.length - 1 - k) * 17, 13, C.dim));
-    }
-  });
+  let x = M;
+  for (const id of CAM_ROW) {
+    const large = id === 'front';
+    const f = large ? CAMERA_MAIN : CAMERA_THUMB;
+    const pw = f.w + 32;
+    panel(cv, x, Y0, pw, Y1 - Y0);
+    // все кадры по одной середине — середине переднего
+    const fy = Y0 + CAMERA_LABEL_H + (CAMERA_MAIN.h - f.h) / 2;
+    const nw = text(cv, t.native.cameras.names[id], x + 16, fy - 10, large ? 18 : 16, C.text);
+    if (demo) text(cv, t.native.cameras.demo, x + 16 + nw + 10, fy - 10, 13, C.warn);
+    cameraFrame(env, id, x + 16, fy, f.w, f.h, large);
+    x += pw + GAP;
+  }
 }
 
 export type PageFn = (env: PageEnv) => void;

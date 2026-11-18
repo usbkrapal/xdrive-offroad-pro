@@ -1,4 +1,4 @@
-// «Диагностика чтения» в «Настройках»: строки из настоящего снимка VehicleAdapter.diagnostics() (через
+// «Диагностика чтения» (лист разработчика, XOP_DEV=diag): строки из настоящего снимка VehicleAdapter.diagnostics() (через
 // NativeModel в режиме «Автомобиль», ctx.signals.watch — фальшивый SOME/IP), лист на настоящем Recorder kit.
 
 import assert from 'node:assert/strict';
@@ -12,6 +12,9 @@ import { FakeTransport, flush, stageVendorKit, THEME } from './helpers';
 
 const CDS = 'de.bmw.infotainment.vehicle.CDS';
 const TPMS = 'de.bmw.infotainment.vehicle.TPMS';
+const BDS = 'de.bmw.infrastructure.analytics.BasicDataSet';
+const STEER = 'de.bmw.chassis.SteeringAngle';
+const V2 = 'de.bmw.infotainment.vehicle.Vehicle2';
 const VIN_LIKE = 'WBACV810X0LM12345';
 
 async function vehicleModel() {
@@ -121,9 +124,12 @@ describe('диагностика чтения: строки из снимка а
       at: 5000,
       interfaces: [],
       reasons: {},
+      sources: {},
       tyreUnits: { pressure: 'none', temperature: 'none' },
       gearboxOilPromoted: false,
-      firstSamples: [0, 1, 2, 3].map((n) => ({ at: 1000, iface: 'x', field: `f${n}`, values: { ...values, label: 'STRING_ENUM' } })),
+      gearboxOil: 'noSamples',
+      latestSamples: [0, 1, 2, 3].map((n) => ({ at: 1000, iface: 'x', field: `f${n}`, values: { ...values, label: 'STRING_ENUM' } })),
+      firstSamples: [],
       changes: [],
     };
     const lines = diagnosticsLines(d);
@@ -131,6 +137,77 @@ describe('диагностика чтения: строки из снимка а
     assert.equal(raw.length, MAX_RAW);
     assert.ok(!lines.some((l) => l.value === 'STRING_ENUM' || l.label.trim() === 'label'), 'строки (enum) не показываются');
     assert.ok(lines.length <= MAX_LINES);
+  });
+
+  it('сырые числа — ПОСЛЕДНИЙ отсчёт каждого поля с временем получения, не первый с запуска (было: 378 с при свежих сообщениях)', async () => {
+    const { tr, model, advance } = await vehicleModel();
+    try {
+      // непрерывное поле (без кольца изменений): прежняя версия показывала только первый отсчёт и его возраст
+      tr.feed(V2, 'statusCarSpeed2', { speedVehicleCentreOfGravity: 100 });
+      for (let i = 0; i < 378; i++) {
+        advance(1000);
+        tr.feed(V2, 'statusCarSpeed2', { speedVehicleCentreOfGravity: 200 + i });
+      }
+      const d = model.diagnostics()!;
+      const latest = d.latestSamples.find((e) => e.field === 'statusCarSpeed2')!;
+      assert.equal(latest.values.speedVehicleCentreOfGravity, 577);
+      assert.equal(latest.at, d.at, 'время — момент получения последнего отсчёта');
+      assert.equal(d.firstSamples.find((e) => e.field === 'statusCarSpeed2')!.values.speedVehicleCentreOfGravity, 100, 'первый — только история');
+      const lines = diagnosticsLines(d);
+      const raw = lines.slice(lines.findIndex((l) => l.label === DIAG.raw) + 1);
+      const at = raw.findIndex((l) => l.label === '   statusCarSpeed2');
+      assert.deepEqual([raw[at].value, raw[at + 1].value], ['0,0 с назад', '577']);
+      assert.ok(!raw.some((l) => l.value === '100'), 'первого отсчёта среди «последних» нет');
+    } finally {
+      model.dispose();
+    }
+  });
+
+  it('руль: последние сырые обоих полей (главного и NoCRC) видны отдельно; источник показанного значения — главное поле', async () => {
+    const { tr, model, advance } = await vehicleModel();
+    try {
+      tr.feed(STEER, 'ActualSteeringAngleDriver', { actualValueSteeringAngleDriver: 47321 });
+      advance(500);
+      tr.feed(STEER, 'actualSteeringAngleDriverNoCRC', { actualValueSteeringAngleDriver: 32696 });
+      const d = model.diagnostics()!;
+      assert.equal(d.sources.steeringWheelAngleDeg, 'ActualSteeringAngleDriver');
+      const raw = (f: string) => d.latestSamples.find((e) => e.field === f)!;
+      assert.deepEqual([raw('ActualSteeringAngleDriver').values.actualValueSteeringAngleDriver, raw('actualSteeringAngleDriverNoCRC').values.actualValueSteeringAngleDriver], [47321, 32696]);
+      assert.equal(raw('ActualSteeringAngleDriver').at + 500, raw('actualSteeringAngleDriverNoCRC').at);
+      const lines = diagnosticsLines(d);
+      assert.ok(lines.some((l) => l.label === 'steeringWheelAngleDeg' && l.value === 'ActualSteeringAngleDriver'));
+      assert.ok(lines.some((l) => l.label === DIAG.steeringNote));
+    } finally {
+      model.dispose();
+    }
+  });
+
+  it('масло КПП: провайдер BasicDataSet недоступен ≠ «ждём изменения»; «ждём изменения» — только при отсчётах', async () => {
+    const { tr, model, advance } = await vehicleModel();
+    try {
+      advance(1000);
+      let d = model.diagnostics()!;
+      assert.equal(d.gearboxOil, 'providerUnavailable');
+      assert.match(String(d.reasons['temperature.gearboxC']), /провайдер интерфейса недоступен, отсчётов не было/);
+      assert.match(String(d.reasons['xdrive.rearPercent']), /провайдер интерфейса недоступен/);
+      let line = diagnosticsLines(d).find((l) => l.label === DIAG.gearboxOil)!;
+      assert.equal(line.value, DIAG.gearboxOilState.providerUnavailable);
+      assert.equal(line.tone, 'warn');
+      assert.doesNotMatch(line.value, /ждём изменения/);
+      tr.setAvailable(BDS, true);
+      d = model.diagnostics()!;
+      assert.equal(d.gearboxOil, 'noSamples');
+      tr.feed(BDS, 'basicDataSet', { valueTemperatureTransmissionOil: 120 });
+      d = model.diagnostics()!;
+      assert.equal(d.gearboxOil, 'waitingChange');
+      assert.match(String(d.reasons['temperature.gearboxC']), /ждём изменения/);
+      line = diagnosticsLines(d).find((l) => l.label === DIAG.gearboxOil)!;
+      assert.equal(line.value, DIAG.gearboxOilState.waitingChange);
+      tr.feed(BDS, 'basicDataSet', { valueTemperatureTransmissionOil: 121 });
+      assert.equal(model.diagnostics()!.gearboxOil, 'shown');
+    } finally {
+      model.dispose();
+    }
   });
 
   it('ошибка подписки показывается строкой интерфейса', async () => {

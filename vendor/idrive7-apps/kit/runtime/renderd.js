@@ -43,8 +43,22 @@ const X_MODE_LAYER = 1;
 // mgu-render/1 pictures (IMAGE, message 10): at most this many px a side; X_PIXMAP formats and filters
 const PICTURE = 10, PICTURE_MAX = 1024, PIXMAP_PREMULTIPLIED = 1, PIXMAP_LINEAR = 1;
 // record.js draw ops: words each takes, op word included (proto.h); variable ones below
-const OP_IMAGE = 18;
-const OP_WORDS = [0, 2, 6, 0, 7, 8, 0, 9, 12, 7, 0, 0, 4, 5, 1, 10, 2, 4, 7];
+const OP_IMAGE = 18, OP_VIDEO = 19;
+const OP_WORDS = [0, 2, 6, 0, 7, 8, 0, 9, 12, 7, 0, 0, 4, 5, 1, 10, 2, 4, 7, 7];
+// mgu-render/1 video (PROTOCOL.md "Video"): VIDEO u32 id + utf8 frame file path, DROP_VIDEO u32 id; at most 4 an app
+const VIDEO = 13, DROP_VIDEO = 14, VIDEO_MAX = 4, VIDEO_PATH = /^\/dev\/shm\/mgu-video-[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
+/** Draw ops without op 19 (a connection in the upstream dialect has no video): a copy only when there is one. */
+function withoutVideo(u) {
+    let out = null, o = 0;
+    for (let i = 0; i < u.length;) {
+        const n = opWords(u, i);
+        if (!n || i + n > u.length) return null;
+        if (u[i] === OP_VIDEO) { if (!out) { out = new Uint32Array(u.length); out.set(u.subarray(0, i)); o = i; } }
+        else if (out) { out.set(u.subarray(i, i + n), o); o += n; }
+        i += n;
+    }
+    return out ? out.subarray(0, o) : u;
+}
 function opWords(u, i) {
     const op = u[i];
     switch (op) {
@@ -107,7 +121,8 @@ class RenderClient extends EventEmitter {
         this.placement = null;
         this.visible = false;
         this.inbuf = Buffer.alloc(0);
-        this.sent = { atlas: new Set(), ramp: new Set(), layer: new Set(), image: new Map() };
+        this.sent = { atlas: new Set(), ramp: new Set(), layer: new Set(), image: new Map(), video: new Set() };
+        this.videos = new Map();     // id -> /dev/shm path the app named (video()); sent again after a reconnect or a resize
         this.stats = null;
         this.waiting = false;        // a frame was sent, no tick back yet
         this.retry = null;
@@ -226,7 +241,7 @@ class RenderClient extends EventEmitter {
         if (this.sock) this.sock.destroy();
         if (this.fd !== null) { fs.closeSync(this.fd); this.fd = null; }
     }
-    _reset() { this.sent.atlas.clear(); this.sent.ramp.clear(); this.sent.layer.clear(); this.sent.image.clear(); this.waiting = false; }
+    _reset() { this.sent.atlas.clear(); this.sent.ramp.clear(); this.sent.layer.clear(); this.sent.image.clear(); this.sent.video.clear(); this.waiting = false; }
     _write(b) {
         if (this.fd !== null) { fs.writeSync(this.fd, b); return true; }
         return this.sock && this.connected ? this.sock.write(b) : false;
@@ -260,7 +275,7 @@ class RenderClient extends EventEmitter {
                 const caps = p.readUInt32LE(8);
                 this.native = true;
                 this.info = { touch: !!(caps & 1), controller: !!(caps & 2), frontGate: !!(caps & 4), pixmaps: !!(caps & 8),
-                    pixmapMax: (caps & 8) && p.length >= 48 ? p.readUInt32LE(44) : 0 };
+                    pixmapMax: (caps & 8) && p.length >= 48 ? p.readUInt32LE(44) : 0, video: !!(caps & 16) };
                 // the app area (where the HMI leaves room for apps, in screen px): after the embed box
                 this.area = p.length >= 44 ? { x: p.readInt32LE(28), y: p.readInt32LE(32), w: p.readInt32LE(36), h: p.readInt32LE(40) } : null;
             } else if (type === E.READY) {
@@ -275,6 +290,7 @@ class RenderClient extends EventEmitter {
                 // after the app's placement (sent in 'ready'): SHOW again. A SHOW sent before the renderer
                 // knew where the app goes (or before X_MODE) left the first app opened after start blank.
                 if (this.placement) this._sendPlace();
+                this._sendVideos();
                 if (this.visible) this._write(this._u32msg(M.SHOW, [1]));
                 if (this.native && this.grabbing) this._sendGrab(1);
             } else if (this.native && type === X.STATE && p.length >= 12) {
@@ -323,7 +339,39 @@ class RenderClient extends EventEmitter {
         // the old one (sent again, they replace those)
         if (resize) this._reset();
         else if (scaleChanged) { this.sent.layer.clear(); this.waiting = false; }
-        if (this.ready) this._sendPlace();
+        if (this.ready) { this._sendPlace(); this._sendVideos(); }
+    }
+    /** The renderer offers video on this connection (mgu-render/1, X_READY caps 16). */
+    get videoOk() { return !!(this.ready && this.native && this.info && this.info.video); }
+    /**
+     * Name video `id`'s frame file (/dev/shm/mgu-video-<name>, written by another program): op 19 with this id draws
+     * its newest frame. false: refused (bad id or path, more than VIDEO_MAX). Kept and sent again after a reconnect or
+     * a new size (the renderer drops videos with the other resources); sent once the renderer offers video.
+     */
+    video(id, path) {
+        id = id >>> 0;
+        if (!id || typeof path !== 'string' || !VIDEO_PATH.test(path)) return false;
+        if (!this.videos.has(id) && this.videos.size >= VIDEO_MAX) return false;
+        if (this.videos.get(id) === path && this.sent.video.has(id)) return true;
+        this.videos.set(id, path);
+        this.sent.video.delete(id);
+        this._sendVideos();
+        return true;
+    }
+    dropVideo(id) {
+        id = id >>> 0;
+        if (!this.videos.delete(id)) return;
+        if (this.sent.video.delete(id) && this.videoOk) this._write(this._u32msg(DROP_VIDEO, [id]));
+    }
+    _sendVideos() {
+        if (!this.videoOk || !this.placement) return;
+        this.videos.forEach((path, id) => {
+            if (this.sent.video.has(id)) return;
+            const p = Buffer.from(path + '\0'), b = Buffer.alloc(4 + p.length + ((4 - (p.length & 3)) & 3));
+            b.writeUInt32LE(id, 0); p.copy(b, 4);
+            this._write(msg(VIDEO, b));
+            this.sent.video.add(id);
+        });
     }
     _sendPlace() {
         const p = this.placement, b = Buffer.alloc(28);
@@ -416,7 +464,11 @@ class RenderClient extends EventEmitter {
     }
     /** draw ops as this connection's dialect has them; null (logged): not to be sent */
     _ops(u, what) {
-        if (!this.native) return u;
+        if (!this.native) {
+            const out = withoutVideo(u);
+            if (!out) this.log.error('renderd: ' + what + ' has a word that is no draw op - not sent');
+            return out;
+        }
         const out = nativeOps(u);
         if (!out) this.log.error('renderd: ' + what + ' has a word that is no draw op - not sent');
         return out;

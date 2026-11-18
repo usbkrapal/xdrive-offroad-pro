@@ -25,3 +25,8 @@
 Ubuntu-атласы (включая кириллицу) сохраняют Ubuntu Font Licence 1.0; текст с copyright Canonical — `licenses/UBUNTU_FONT_LICENCE.txt`, копия включается рядом с атласами. Источник лицензии: https://github.com/google/fonts/tree/main/ufl/ubuntu. Атлас Noto Sans SC сохраняет upstream OFL-NotoSansSC.txt. Приложение не заявляет авторство шрифтов.
 
 Для оригинального приложения лицензия пока не выбрана: публичный репозиторий не меняет этот статус. MIT относится к соответствующим сторонним частям, UFL/OFL — к шрифтам.
+
+## Схемы диагностических записей (18 ноября 2026)
+
+Раскладка записей LMV DB32, DSC DBE4/DBE5, VDP DC05/DC06/DC31/D8EC и EPS DB57 (типы, порядок байт, масштаб, таблицы значений) взята из каталогов [strulock/m550-analyzer](https://github.com/strulock/m550-analyzer/tree/2a2002b1da63ed5bdb793ff294d4c2b06493a531) (MIT, commit `2a2002b1da63ed5bdb793ff294d4c2b06493a531`). Код проекта не копировался. Полный текст лицензии — `licenses/M550_ANALYZER_MIT.txt`; он добавляется в NOTICE пакета (`native/scripts/build.ts`). Автор каталогов предупреждает, что каталоги не проверены на автомобиле: значения в интерфейсе — только для блоков, опознанных по SGBD-индексу. Схема EGS 6000 и формат кадра TASU — из idrive7-apps (`apps/zf8hp`, `kit/runtime/diag.js`, MIT, прежнее уведомление).
+

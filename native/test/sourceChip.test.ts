@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildSignal } from '../../src/domain/signal';
 import { startApp } from '../src/app';
+import { PRODUCTION } from '../src/devAccess';
 import { presentSource } from '../src/format';
 import { T } from '../src/strings';
 import { fakeCtx, fakeKit, FakeTransport, flush, syntheticAssets, type TextCall } from './helpers';
@@ -22,78 +23,53 @@ describe('presentSource', () => {
   });
 });
 
-describe('«Сцепление» в режиме «Автомобиль»: чип источника распределения', () => {
+describe('«Сцепление» с данными автомобиля: источник — не надпись на экране', () => {
   const texts = (ctx: ReturnType<typeof fakeCtx>): string[] => (ctx.shown[ctx.shown.length - 1].cv as unknown as { texts: TextCall[] }).texts.map((x) => x.s);
 
-  it('нет данных → «нет данных», не «Измерено»; пришла задняя доля → «Измерено» и «передняя — оценка»', async () => {
+  it('ни «Измерено», ни «Источник распределения»; передняя доля, выведенная из задней, помечена только при значении', async () => {
     const tr = new FakeTransport();
-    const ctx = fakeCtx(tr, { dataSource: 'vehicle' });
-    const app = startApp(ctx, fakeKit(), syntheticAssets(), () => Date.now());
+    const ctx = fakeCtx(tr);
+    const app = startApp(ctx, fakeKit(), syntheticAssets(), () => Date.now(), PRODUCTION);
     try {
       await flush();
       ctx.tab!(1);
       await ctx.loopFn!();
       let tx = texts(ctx);
-      assert.ok(!tx.includes(T.source.measured), `до данных нет «${T.source.measured}»: ${tx.filter((s) => /Измер|Оцен/.test(s)).join(',')}`);
-      assert.ok(!tx.includes(T.source.estimated));
-      assert.ok(tx.includes(T.native.noSource));
-
-      // raw 0 — «не заполнено» (INTEGRATION.md): провайдер есть, значения нет — всё ещё не «Измерено»
+      for (const s of [T.source.measured, T.source.estimated, T.traction.splitSource, T.native.frontDerived]) assert.ok(!tx.includes(s), `нет «${s}» без данных`);
       tr.feed(BDS, 'basicDataSet', { [SPLIT]: 0 });
-      await new Promise((r) => setTimeout(r, 120));
       await ctx.loopFn!();
-      tx = texts(ctx);
-      assert.ok(!tx.includes(T.source.measured), 'не заполнено — без источника');
-      assert.ok(tx.includes(T.native.noSource));
-
+      assert.ok(!texts(ctx).includes(T.native.frontDerived), 'не заполнено — пометки нет');
       tr.feed(BDS, 'basicDataSet', { [SPLIT]: 6000 });
-      await new Promise((r) => setTimeout(r, 120));
       await ctx.loopFn!();
       tx = texts(ctx);
-      assert.ok(tx.includes(T.source.measured), 'задняя доля пришла — «Измерено»');
       assert.ok(tx.includes(T.native.frontDerived), 'передняя — производная, помечена');
-      assert.ok(!tx.includes(T.native.noSource));
-    } finally {
-      app.dispose();
-    }
-  });
-
-  it('демо со значением: источник «Демо», не «Измерено»', async () => {
-    const tr = new FakeTransport();
-    const ctx = fakeCtx(tr, { dataSource: 'demo', scenario: 'mountainTrail' });
-    const app = startApp(ctx, fakeKit(), syntheticAssets(), () => Date.now());
-    try {
-      ctx.tab!(1);
-      await ctx.loopFn!();
-      const tx = texts(ctx);
-      assert.ok(tx.includes(T.source.mock), 'демо со значением — «Демо»');
-      assert.ok(!tx.includes(T.source.measured));
+      assert.ok(!tx.includes(T.source.measured) && !tx.includes(T.traction.splitSource));
     } finally {
       app.dispose();
     }
   });
 });
 
-describe('«Камеры» в режиме «Автомобиль»: Drive Recorder, живое изображение не подключено', () => {
-  it('формулировка: камеры не «отсутствуют»; все три без изображения; кнопок выбора и демо-кадров нет', async () => {
+describe('«Камеры» с данными автомобиля: живое изображение не подключено', () => {
+  it('левая — передняя — правая; у каждой одна короткая подпись «нет видео»; без демо-кадров, кнопок и пояснений', async () => {
     const tr = new FakeTransport();
-    const ctx = fakeCtx(tr, { dataSource: 'vehicle' }, { own: true });
+    const ctx = fakeCtx(tr, {}, { own: true });
     const kit = fakeKit();
-    const app = startApp(ctx, kit, syntheticAssets(), () => Date.now());
+    const app = startApp(ctx, kit, syntheticAssets(), () => Date.now(), PRODUCTION);
     try {
       ctx.tab!(4);
       await ctx.loopFn!();
       const cv = ctx.shown[ctx.shown.length - 1].cv as unknown as { texts: TextCall[]; images: number[] };
-      const tx = cv.texts.map((x) => x.s).join('\n');
-      assert.equal(T.native.cameras.vehicleNote, 'Камеры автомобиля доступны в Drive Recorder. Передача живого изображения в Terrain Monitor ещё не подключена.');
-      assert.equal(cv.texts.filter((x) => x.s.includes('Drive Recorder')).length, 1, 'Drive Recorder — одна общая пометка, не у каждой камеры');
-      assert.ok(tx.includes('Камеры автомобиля доступны в Drive Recorder.'));
-      assert.ok(tx.includes('Передача живого изображения в Terrain Monitor ещё не подключена.'));
-      assert.equal(cv.texts.filter((x) => x.s === T.native.cameras.vehicleNoFeed).length, 3, 'все три камеры — без изображения');
-      assert.equal(cv.texts.filter((x) => x.s === T.native.cameras.vehicleStatus).length, 3);
-      assert.ok(!/не подключены\.|недоступн|отсутству|нет камер/i.test(tx), 'аппаратура камер не объявлена отсутствующей');
-      assert.equal(cv.images.length, 0, 'ни одного кадра (демо-снимков в режиме автомобиля нет)');
-      assert.deepEqual(kit.buttons, [], '«Показать крупно» — только в демо');
+      const names = T.native.cameras.names;
+      const order = [names.left, names.front, names.right].map((n) => cv.texts.find((x) => x.s === n));
+      assert.ok(order.every(Boolean), 'три названия');
+      assert.ok(order[0]!.x < order[1]!.x && order[1]!.x < order[2]!.x, 'слева направо: левая, передняя, правая');
+      assert.equal(cv.texts.filter((x) => x.s === 'Недоступно').length, 3, 'по одной подписи «Недоступно» на кадр');
+      const page = cv.texts.filter((x) => x.s !== T.app.title && x.s !== T.app.subtitle); // знак — в полосе вкладок (без chrome)
+      assert.equal(page.length, 6, 'кроме названий и подписей текста нет');
+      assert.ok(!/live|живое|Drive Recorder|ДЕМО/i.test(cv.texts.map((x) => x.s).join('\n')), 'не утверждает живую интеграцию и не демо');
+      assert.equal(cv.images.length, 0, 'ни одного кадра (демо-снимков нет)');
+      assert.deepEqual(kit.buttons, []);
     } finally {
       app.dispose();
     }

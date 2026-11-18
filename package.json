@@ -19,7 +19,9 @@
     "native:preview": "node --import tsx native/scripts/stage.ts --preview",
     "native:vendor": "node --import tsx native/scripts/vendor-upstream.ts",
     "native:package": "npm run native:build && node --import tsx native/scripts/package-store.ts",
-    "native:test:package": "python3 -I native/test/test_store_package.py"
+    "native:test:package": "python3 -I native/test/test_store_package.py",
+    "native:bundle-bridge": "node --import tsx native/scripts/bundle-bridge.ts",
+    "native:verify:release": "python3 -I native/scripts/verify_store_package.py release native/release --spec native/dist/xdrive_offroad_pro/app.json"
   },
   "dependencies": {
     "react": "^19.1.0",
