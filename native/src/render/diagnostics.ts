@@ -57,12 +57,12 @@ export const DIAG = {
   errorPast: 'прошлая ошибка',
   reasons: 'Почему без значения',
   units: 'Единицы TPMS (давление / температура)',
-  gearboxOil: 'Масло КПП',
+  gearboxOil: 'Масло КПП · BasicDataSet',
   gearboxOilState: {
     shown: 'показывается',
     waitingChange: 'отсчёты BasicDataSet есть — ждём изменения сырого значения',
     noSamples: 'BasicDataSet доступен, отсчётов не было',
-    providerUnavailable: 'BasicDataSet недоступен — значения нет (это не ожидание изменения)',
+    providerUnavailable: 'BasicDataSet недоступен; источник UDS проверяется отдельно',
     notSubscribed: 'нет подписки на BasicDataSet',
   } as Record<GearboxOilState, string>,
   sources: 'Источник показанного значения (поле)',
@@ -131,6 +131,17 @@ export function udsLines(at: number, u: UdsDiagnosticsSnapshot | null): DiagLine
       out.push({ label: `   ${r.did} ${r.name}`, value: clip([`успешно ${r.ok}`, `ошибок ${r.failed}`, ageText(at, r.lastAt), r.lastError].filter(Boolean).join(' · ')), tone: r.lastError ? 'warn' : 'dim' });
       if (r.lastRaw) out.push({ label: '      raw', value: clip(r.lastRaw), tone: 'dim' });
       if (r.values) {
+        if (e.key === 'ACSM' && r.did === '4101' && 'accX' in r.values) {
+          for (const [prefix, label] of [['acc', 'Ускорения, м/с²'], ['rate', 'Скорости вращения, °/с']]) {
+            const axes = ['X', 'Y', 'Z'].map((axis) => {
+              const v = r.values![prefix + axis];
+              const q = r.values![prefix + axis + 'Qualifier'];
+              return `${axis}: ${v === null ? '—' : formatNumber(v, 2)} (q=${q})`;
+            });
+            out.push({ label: `      ${label}`, value: axes.join(' · '), tone: 'dim' });
+          }
+          continue;
+        }
         const vals = Object.keys(r.values).map((k) => `${k}=${r.values![k] === null ? '—' : formatNumber(r.values![k] as number, 2)}`);
         out.push({ label: e.state === 'accepted' ? '      разбор' : `      ${DIAG.candidate}`, value: clip(vals.join(' ')), tone: 'dim' });
       }

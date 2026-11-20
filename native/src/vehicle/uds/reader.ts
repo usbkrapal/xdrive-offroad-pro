@@ -60,6 +60,17 @@ const TIMEOUT_MAX_MS = 30000;
 /** Начальная оценка длительности одного запроса, мс (затем — скользящее среднее измеренных). */
 const COST_START_MS = 300;
 
+export type PollingView = 'terrain' | 'traction' | 'suspension' | 'systems' | 'cameras';
+const VIEW_TARGETS: Record<PollingView, readonly string[]> = {
+  terrain: ['temperature.gearboxC', 'rideHeightSensor.', 'ehcLevel', 'pitchVsAxlesDeg', 'xdrive.', 'rearLock.'],
+  traction: ['wheelSpeed.', 'wheelDelta.', 'brakePressure.', 'xdrive.', 'rearLock.'],
+  suspension: ['rideHeightSensor.', 'ehcLevel'],
+  systems: ['temperature.gearboxC', 'driveMode', 'dsc.', 'hdc.'],
+  cameras: [],
+};
+/** Показания других вкладок продолжают читаться, но не конкурируют с текущей каждую секунду. */
+const BACKGROUND_PERIOD_MS = 5000;
+
 export type IdentState = 'pending' | 'accepted' | 'unverified' | 'failed';
 
 interface RecState {
@@ -130,6 +141,7 @@ export class UdsReader {
   private costMs = COST_START_MS;
   /** Наименьший период показываемых записей по бюджету шины, мс (0 — бюджет не ограничивает). */
   private floorMs = 0;
+  private view: PollingView | null = null;
 
   constructor(
     private readonly port: ReadPort,
@@ -146,6 +158,28 @@ export class UdsReader {
   /** Экран приложения виден: только тогда идут запросы. */
   setVisible(v: boolean): void {
     this.visible = v;
+  }
+
+  setView(view: PollingView): void {
+    if (this.view === view) return;
+    this.view = view;
+    this.budget();
+    const now = this.now();
+    for (const e of this.ecus) {
+      if (e.ident !== 'accepted') continue;
+      for (const rec of recordsFor(e.spec, e.identity)) {
+        const st = e.recs.get(rec.schema.did);
+        if (!st || st.lastError || rec.diagnosticOnly || !this.inView(rec)) continue;
+        // Возврат на вкладку ускоряет ближайшее чтение, но быстрое листание не обходит базовый период.
+        st.nextAt = Math.min(st.nextAt, Math.max(now, (st.lastAt ?? 0) + rec.periodMs));
+      }
+    }
+  }
+
+  private inView(rec: RecordSpec): boolean {
+    // Записи состояния/калибровки без выходов нужны для пригодности основных измерений.
+    return this.view === null || !rec.outputs.length || rec.outputs.some((o) =>
+      VIEW_TARGETS[this.view!].some((prefix) => o.target.id === prefix || (prefix.endsWith('.') && o.target.id.startsWith(prefix))));
   }
 
   start(): void {
@@ -187,8 +221,13 @@ export class UdsReader {
 
   /** Базовый период записи без бюджета: неопознанный блок / только диагностика / свой. */
   private basePeriod(e: EcuState, rec: RecordSpec): number {
-    if (e.ident !== 'accepted') return UNVERIFIED_PERIOD_MS;
-    return rec.diagnosticOnly ? Math.max(rec.periodMs, DIAGNOSTIC_PERIOD_MS) : rec.periodMs;
+    const normal = e.ident !== 'accepted' ? UNVERIFIED_PERIOD_MS
+      : rec.diagnosticOnly ? Math.max(rec.periodMs, DIAGNOSTIC_PERIOD_MS)
+      : this.inView(rec) ? rec.periodMs : Math.max(rec.periodMs, BACKGROUND_PERIOD_MS);
+    const st = e.recs.get(rec.schema.did);
+    // Отвергнутый DID / несовместимый формат уже читается редко. Нельзя резервировать для него
+    // исходный быстрый период: на G07 отказ D8EC замедлял все исправные показания.
+    return st && st.lastError && st.timeouts === 0 ? Math.max(normal, REFUSED_PERIOD_MS) : normal;
   }
 
   /** Период с бюджетом шины: показываемые записи опознанных блоков — не чаще P* (floorMs). */
@@ -222,7 +261,7 @@ export class UdsReader {
       if (e.ident === 'accepted')
         for (const rec of recordsFor(e.spec, e.identity)) {
           const st = e.recs.get(rec.schema.did);
-          if (!rec.diagnosticOnly && !(st && st.timeouts > 0)) bases.push(rec.periodMs);
+          if (!rec.diagnosticOnly && !(st && st.timeouts > 0)) bases.push(this.basePeriod(e, rec));
         }
     let lo = 0;
     let hi = 120000;
@@ -236,8 +275,8 @@ export class UdsReader {
   }
 
   /** Срок свежести выхода записи: как в схеме, растянутый вместе с периодом, но не больше MAX_STALE_MS. */
-  private staleOf(rec: RecordSpec): number {
-    const period = rec.diagnosticOnly ? rec.periodMs : Math.max(rec.periodMs, this.floorMs);
+  private staleOf(e: EcuState, rec: RecordSpec): number {
+    const period = this.periodOf(e, rec);
     return Math.max(rec.staleMs, Math.min(3 * period + TIMEOUT_ALLOWANCE_MS, MAX_STALE_MS));
   }
 
@@ -326,7 +365,7 @@ export class UdsReader {
     const st = this.rec(e, rec);
     const accepted = e.ident === 'accepted';
     const period = this.periodOf(e, rec);
-    const staleMs = this.staleOf(rec);
+    const staleMs = this.staleOf(e, rec);
     st.nextAt = t + period;
     if (r.kind === 'timeout') {
       // молчащая запись не должна занимать шину каждый период (каждый тайм-аут — до 1,5…4 с)
@@ -350,6 +389,7 @@ export class UdsReader {
       st.failed++;
       st.lastError = d.error;
       st.last = null;
+      st.nextAt = t + Math.max(period, REFUSED_PERIOD_MS);
       this.noteRecord(e, rec, st, d.error, null);
       if (accepted) for (const o of rec.outputs) this.sink({ target: o.target, value: null, absent: false, reason: `${did4(rec.schema.did)}: ${d.error}`, at: t, staleMs, field: this.field(e, rec) });
       return;
@@ -362,12 +402,15 @@ export class UdsReader {
     st.lastAt = t;
     st.lastError = null;
     st.last = d.rec;
+    // После восстановления больше не держать отсрочку ошибки.
+    this.budget();
+    st.nextAt = t + this.periodOf(e, rec);
     this.noteRecord(e, rec, st, null, d.rec);
     if (!accepted) return;
     const others = (did: number) => {
       const o = e.recs.get(did);
       const spec = recordsFor(e.spec, e.identity).find((x) => x.schema.did === did);
-      return o && o.last && o.lastAt !== null && spec && t - o.lastAt <= this.staleOf(spec) ? o.last : null;
+      return o && o.last && o.lastAt !== null && spec && t - o.lastAt <= this.staleOf(e, spec) ? o.last : null;
     };
     for (const o of rec.outputs) {
       const gate = rec.gate ? rec.gate(o.value, others) : null;

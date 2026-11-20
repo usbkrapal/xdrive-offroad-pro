@@ -82,6 +82,9 @@ void Pipeline::on_au(const Au &au)
 void Pipeline::on_frame(const woc::VideoFrame &f)
 {
     st_.frames++;
+    // Record decoder output even if it never reaches the crop or video file.
+    st_.last_w = f.w;
+    st_.last_h = f.h;
     Pending &p = pending_[f.id % kPending];
     if (f.id == 0 || p.id != f.id) {
         st_.unmatched++;   /* not an id given (or no longer pending): never guessed */
@@ -119,8 +122,6 @@ void Pipeline::on_frame(const woc::VideoFrame &f)
         st_.bad_size++;
         return;
     }
-    st_.last_w = f.w;
-    st_.last_h = f.h;
     for (int i = 0; i < n; i++) {
         const Crop &c = crops[i];
         if (!enabled_[c.view])

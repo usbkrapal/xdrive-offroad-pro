@@ -155,6 +155,10 @@ export interface RenderConnection {
   readonly info?: { readonly controller?: boolean; readonly video?: boolean } | null;
   /** Рендерер принимает видео на этом соединении. */
   readonly videoOk?: boolean;
+  /** Фактическое состояние X_STATE; null — рендерер его ещё не сообщил. */
+  readonly onScreen?: boolean | null;
+  readonly visible?: boolean;
+  readonly screen?: { readonly w: number; readonly h: number };
   /** Назвать файл кадров видео id (/dev/shm/mgu-video-*); false — отклонено. */
   video?(id: number, path: string): boolean;
   dropVideo?(id: number): void;
@@ -167,6 +171,8 @@ export interface DisplayApi {
   /** Бейджи в шапке поместились рядом с брендом и всеми вкладками (иначе kit убрал их из шапки). */
   readonly headBadges?: boolean;
   readonly gpu?: RenderConnection | null;
+  readonly blocked?: boolean;
+  readonly place?: { readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly full: boolean } | null;
   layout?(): string;
   /** kit сам ведёт экран (mgu-render/1 с касанием, «Весь экран»). */
   own?(): boolean;

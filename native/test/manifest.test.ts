@@ -41,10 +41,10 @@ describe('app.json', () => {
     assert.equal(m.loggingId, LOGGING_ID);
     assert.match(m.loggingId, /^[A-Z0-9]{4}$/);
     assert.deepEqual(m.mguHmi, ['ID7']);
-    assert.deepEqual(m.requires, { 'mgu-render': '0.6.21', 'mgu-deploy': '0.8.19', 'xop-camera-bridge': '0.1.3' });
+    assert.deepEqual(m.requires, { 'mgu-render': '0.6.21', 'mgu-deploy': '0.8.19', 'xop-camera-bridge': '0.1.4' });
     assert.deepEqual(m.requires, { ...REQUIRES });
     assert.doesNotMatch(JSON.stringify(m), /idrive7-renderd|2\.1\.15/, 'старый рендерер нигде не упомянут');
-    assert.equal((m as unknown as { version: string }).version, '0.1.3');
+    assert.equal((m as unknown as { version: string }).version, '0.1.4');
     assert.equal((m as unknown as { screens: { title: string }[] }).screens[0].title, '', 'нативная шапка не дублирует полноэкранную шапку приложения');
     assert.equal(nativeRu.app.title, APP_TITLE);
     assert.equal(m.autostart, undefined);

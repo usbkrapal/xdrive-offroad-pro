@@ -11,6 +11,7 @@ import { UdsReader, type UdsOutput } from '../src/vehicle/uds/reader';
 import {
   decodeExact,
   ACSM_IMU_RAW,
+  ACSM5_IMU,
   BDC_FES,
   BDC_LWR_PITCH,
   DSC_PRESSURE,
@@ -509,6 +510,25 @@ const dec = (schema: Parameters<typeof decodeExact>[0], p: readonly number[]) =>
 };
 
 describe('UDS: схемы вариантов (точные длины, недопустимое — до масштаба)', () => {
+  it('ACSM5 G07: фото 30 байт даёт ускорения/скорости, не углы; подмена/ошибка оси не принимается', () => {
+    const p = Array.from(Buffer.from('000007F5020000081A02000005FB020000801002000008020200007FE402', 'hex'));
+    const r = dec(ACSM5_IMU, p);
+    for (const [field, expected] of Object.entries({ accX: -0.26, accY: 0.48, accZ: 9.7, rateX: -0.16, rateY: 0, rateZ: -0.14 })) {
+      assert.ok(Math.abs(r.values[field]! - expected) < 1e-8, field);
+    }
+    assert.ok(!('pitchDeg' in r.values) && !('rollDeg' in r.values));
+    for (const q of [0, 4, 6, 7, 8, 15, 255]) {
+      const bad = p.slice(); bad[4] = q;
+      assert.equal(dec(ACSM5_IMU, bad).values.accX, null);
+    }
+    assert.equal(decodeExact(ACSM5_IMU, p.slice(1)).ok, false);
+    const spec = ECUS.find((e) => e.key === 'ACSM')!;
+    const known = recordsFor(spec, '0F2040')[0];
+    assert.equal(known.schema, ACSM5_IMU);
+    assert.equal(known.diagnosticOnly, true);
+    assert.deepEqual(known.outputs, [], 'на приборы углов выхода нет');
+    assert.equal(recordsFor(spec, '0F28C0')[0].schema, ACSM_IMU_RAW, 'другой вариант не разбирается этой схемой');
+  });
   it('DBE4: границы качества 9/10/50/51; > 100 — вне диапазона; знак сохраняется; Δ к опорной — только при качестве > 50 на всех', () => {
     const r = dec(DSC_WHEEL_SPEED, [...be16(1000), ...be16(1000), ...be16(1000), ...be16(1000), ...be16(1000), 1, 1, 1, 1, 1, 9, 10, 50, 51]);
     assert.equal(r.values['speed.FL'], null);
@@ -524,6 +544,7 @@ describe('UDS: схемы вариантов (точные длины, недо�
     const rev = dec(DSC_WHEEL_SPEED, [0xff, 0x9c, ...be16(0), ...be16(0), ...be16(0), ...be16(0), 2, 0, 0, 0, 2, 80, 80, 80, 80]);
     assert.equal(rev.values['speed.FL'], -1, 'знаковое, не abs');
     assert.equal(rev.values['deltaPct.FL'], null, 'назад — оценки нет');
+    assert.equal(rev.unknown?.['deltaPct.FL'], true, 'неприменимая оценка — недоступно, не ошибка данных');
     const fwd = dec(DSC_WHEEL_SPEED, [...be16(2200), ...be16(2000), ...be16(2000), ...be16(2000), ...be16(2000), 1, 1, 1, 1, 1, 80, 80, 80, 80]);
     assert.equal(fwd.values['deltaPct.FL'], 10);
     assert.equal(fwd.values['deltaPct.FR'], 0);
@@ -635,6 +656,31 @@ describe('UDS: записи по варианту и ответ «нет отв�
       return ((d[0] << 8) | d[1]).toString(16);
     });
 
+  it('G07 GSD_F90: ответы из журнала разбираются по своему варианту, старые запросы GHAS10 не посылаются', async () => {
+    const payloads: Record<number, readonly number[]> = {
+      0xf150: [0x0f, 0x25, 0x50], 0x4013: [0x02], 0x4012: [0x00, 0x03],
+      0x4007: [0x0c, 0x79], 0x401b: [0x80], 0xdc47: [0x00, 0x11],
+    };
+    const gsd = ECUS.find((spec) => spec.key === 'GHAS')!;
+    const responder: Responder = (ecu, did) => ecu === 0x0f && payloads[did] ? [payloads[did]] : [{ nrc: 0x31 }];
+    const { f, r, out, steps } = await readerRig(responder, [gsd]);
+    await steps(60);
+    const last = (id: string) => out.filter((v) => v.target.id === id).slice(-1)[0]?.value;
+    assert.equal(r.diagnostics()[0].state, 'accepted');
+    assert.equal(last('rearLock.state'), 2);
+    assert.equal(last('rearLock.targetNm'), 0);
+    assert.equal(last('rearLock.positionInc'), 193);
+    assert.equal(last('rearLock.deltaRpm'), 0);
+    assert.equal(last('rearLock.oilC'), 17);
+    assert.equal(last('rearLock.torqueNm'), null, 'момент 4005 появится только после ответа автомобиля');
+    const dids = reqs(f, 0x0f);
+    assert.ok(dids.includes('4005'));
+    assert.ok(!dids.includes('dc4c') && !dids.includes('400f'));
+    const target = recordsFor(gsd, '0F2550').find((record) => record.schema.did === 0x4012)!.schema;
+    assert.equal(decodeExact(target, [0x03]).ok, false);
+    assert.equal(dec(target, [0x00, 0xff]).values.targetNm, null);
+  });
+
   it('IB_G05 (0F2500): DBE4/DB29/DC6x, никогда DBE5; GSZFB1 (0F21D0): DA12, никогда 6000; значения в сигналы и величины', async () => {
     const { f, out, steps } = await readerRig(g07(), ECUS);
     await steps(80);
@@ -676,7 +722,7 @@ describe('UDS: записи по варианту и ответ «нет отв�
 
 describe('UDS: расписание на последовательной шине (G07, виртуальное время)', () => {
   /** Ответы G07: опознаны DSC IB_G05, EGS GSZFB1, EPS, LMV, VDP, BDC; GHAS и ACSM молчат (не отвечают вообще). */
-  function g07Bus(opts: { latencyMs: number; silentDid?: string }) {
+  function g07Bus(opts: { latencyMs: number; silentDid?: string; refusedDid?: string; malformedDid?: string }) {
     const ID: Record<number, number[]> = {
       0x29: [0x0f, 0x25, 0x00],
       0x18: [0x0f, 0x21, 0xd0],
@@ -714,6 +760,8 @@ describe('UDS: расписание на последовательной шин
           now += opts.latencyMs;
           return { kind: 'ok', payload: ID[ecu] };
         }
+        if (k === opts.refusedDid) return (now += opts.latencyMs), { kind: 'nrc', nrc: 0x0c };
+        if (k === opts.malformedDid) return (now += opts.latencyMs), { kind: 'ok', payload: [] };
         if (k === opts.silentDid || !data[k]) return (now += 1500), { kind: 'timeout' };
         now += opts.latencyMs;
         return { kind: 'ok', payload: data[k] };
@@ -779,6 +827,59 @@ describe('UDS: расписание на последовательной шин
       assert.ok(eps.periodMs >= 20000, `EPS DB57 только диагностика: ${eps.periodMs} мс`);
     });
   }
+
+  for (const failure of ['refusedDid', 'malformedDid'] as const) {
+    it(`${failure}: отказ уровня подвески не резервирует быстрый опрос и не замедляет исправные колёса`, async () => {
+      const healthy = g07Bus({ latencyMs: 200 });
+      const failed = g07Bus({ latencyMs: 200, [failure]: '76:d8ec' });
+      await healthy.run(180000);
+      await failed.run(180000);
+      const goodInterval = intervals(healthy.out, 'wheelSpeed.FL', 30000).median;
+      const failureInterval = intervals(failed.out, 'wheelSpeed.FL', 30000).median;
+      console.log(`${failure}: wheel median ${failureInterval} ms; all healthy ${goodInterval} ms`);
+      assert.ok(failureInterval <= goodInterval, `колёса: ${failureInterval} мс при отказе против ${goodInterval}`);
+      const level = failed.r.diagnostics().find((e) => e.key === 'VDP')!.records.find((r) => r.did === 'D8EC')!;
+      assert.ok(level.failed >= 3 && level.failed <= 7, `ошибочная запись опрошена ${level.failed} раз за три минуты`);
+      assert.ok(level.periodMs >= 30000, 'диагностика отражает действительную отсрочку, а не базовые 5 с');
+      assert.equal(failed.out.filter((o) => o.target.id === 'ehcLevel' && o.value !== null).length, 0);
+    });
+  }
+
+  it('восстановившаяся запись возвращается к обычному периоду, не остаётся на отсрочке ошибки', async () => {
+    const opts = { latencyMs: 200, refusedDid: '76:d8ec' as string | undefined };
+    const { r, run } = g07Bus(opts);
+    const level = () => r.diagnostics().find((e) => e.key === 'VDP')!.records.find((x) => x.did === 'D8EC')!;
+    await run(90000);
+    assert.ok(level().failed > 0 && level().periodMs >= 30000);
+    opts.refusedDid = undefined;
+    await run(180000);
+    assert.equal(level().lastError, null);
+    assert.ok(level().ok >= 5, 'восстановленный ответ снова читается регулярно');
+    assert.ok(level().periodMs < 30000, 'отсрочка снята');
+  });
+
+  it('на «Сцеплении» колёса обновляются быстрее, фоновые показания не голодают, отказы сохраняют отсрочку', async () => {
+    const all = g07Bus({ latencyMs: 200, refusedDid: '76:d8ec' });
+    const focused = g07Bus({ latencyMs: 200, refusedDid: '76:d8ec' });
+    focused.r.setView('traction');
+    await all.run(180000);
+    await focused.run(180000);
+    const before = intervals(all.out, 'wheelSpeed.FL', 30000);
+    const after = intervals(focused.out, 'wheelSpeed.FL', 30000);
+    console.log(`traction wheel median ${before.median} -> ${after.median} ms; p95 ${before.p95} -> ${after.p95}`);
+    assert.ok(after.median < before.median && after.p95 <= before.p95);
+    for (const id of ['temperature.gearboxC', 'rideHeightSensor.FL', 'driveMode']) {
+      assert.ok(worst(focused.out, id, 30000).n >= 10, `${id}: фоновый опрос продолжается`);
+    }
+    const level = focused.r.diagnostics().find((e) => e.key === 'VDP')!.records.find((x) => x.did === 'D8EC')!;
+    const failures = level.failed;
+    focused.r.setView('suspension');
+    await focused.run(181000);
+    const afterLevel = focused.r.diagnostics().find((e) => e.key === 'VDP')!.records.find((x) => x.did === 'D8EC')!;
+    assert.ok(afterLevel.failed <= failures + 1 && afterLevel.periodMs >= 30000);
+    await focused.run(240000);
+    assert.ok(intervals(focused.out, 'rideHeightSensor.FL', 190000).median < 5000, 'после смены вкладки высоты снова приоритетны');
+  });
 
   it('очень медленная шина (ответ 3 с): срок свежести не растягивается сверх 10 с — значения честно устаревают', async () => {
     const { r, out, run } = g07Bus({ latencyMs: 3000 });

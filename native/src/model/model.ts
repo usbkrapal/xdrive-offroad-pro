@@ -5,14 +5,15 @@
 // По умолчанию — автомобиль; демо только явно (приложение: XOP_DEV=demo при запуске, devAccess.ts).
 
 import { AppStore } from '../../../src/app/store';
-import { createSession, ingestSample, type SessionStats } from '../../../src/domain/session';
+import { createSession, ingestSample, type SessionMeasurements, type SessionStats } from '../../../src/domain/session';
 import { SCENARIO_IDS, type ScenarioId, type SignalMap, type TelemetrySnapshot } from '../../../src/domain/types';
 import { MockTelemetryProvider } from '../../../src/providers/mock/MockTelemetryProvider';
 import type { Now } from '../clock';
 import type { Log, WatchFn } from '../platform/kitTypes';
 import { logSummary, VehicleAdapter, type ExtraSignal, type VehicleDiagnostics, type VehicleStatus } from '../vehicle/adapter';
+import { sensorHeightDeltas, wheelDeltaMagnitude } from '../vehicle/derived';
 import { EXTRA_IDS, type ExtraId } from '../vehicle/uds/ecus';
-import { UdsReader, type EcuDiagnostics } from '../vehicle/uds/reader';
+import { UdsReader, type EcuDiagnostics, type PollingView } from '../vehicle/uds/reader';
 import { ReadOnlyTasu, type TasuSignals, type TasuStats } from '../vehicle/uds/tasu';
 
 export type DataMode = 'demo' | 'vehicle';
@@ -50,6 +51,16 @@ export type ModelDiagnostics = VehicleDiagnostics & { readonly uds: UdsDiagnosti
  */
 export const asDomain = (s: NativeSnapshot): TelemetrySnapshot => s as unknown as TelemetrySnapshot;
 
+function vehicleMeasurements(snapshot: NativeSnapshot): SessionMeasurements {
+  return {
+    heightRange: sensorHeightDeltas(snapshot).range,
+    wheelPercent: {
+      FL: wheelDeltaMagnitude(snapshot, 'FL'), FR: wheelDeltaMagnitude(snapshot, 'FR'),
+      RL: wheelDeltaMagnitude(snapshot, 'RL'), RR: wheelDeltaMagnitude(snapshot, 'RR'),
+    },
+  };
+}
+
 export interface NativeState {
   readonly mode: DataMode;
   readonly snapshot: NativeSnapshot;
@@ -76,6 +87,7 @@ interface Source {
   /** Диагностика чтения (только автомобиль); по запросу экрана настроек, не на кадр. */
   diagnostics(): ModelDiagnostics | null;
   setVisible(v: boolean): void;
+  setView(view: PollingView): void;
 }
 
 class DemoSource implements Source {
@@ -114,6 +126,7 @@ class DemoSource implements Source {
     return null;
   }
   setVisible() {}
+  setView() {}
 }
 
 /**
@@ -162,7 +175,7 @@ class VehicleSource implements Source {
       });
     }
     this.snapshot = this.build();
-    this.session = createSession(asDomain(this.snapshot));
+    this.session = createSession(asDomain(this.snapshot), vehicleMeasurements(this.snapshot));
     this.timer = setInterval(() => this.tick(), VEHICLE_TICK_MS);
   }
   private build(): NativeSnapshot {
@@ -178,7 +191,8 @@ class VehicleSource implements Source {
   }
   tick() {
     if (!this.adapter.isActive) return;
-    this.session = ingestSample(this.session, asDomain(this.current()));
+    const snapshot = this.current();
+    this.session = ingestSample(this.session, asDomain(snapshot), vehicleMeasurements(snapshot));
     const at = this.now() - this.t0;
     if (this.log && at - this.lastSummary >= LOG_SUMMARY_MS) {
       this.lastSummary = at;
@@ -204,7 +218,8 @@ class VehicleSource implements Source {
     return false;
   }
   newSession() {
-    this.session = createSession(asDomain(this.snapshot));
+    const snapshot = this.current();
+    this.session = createSession(asDomain(snapshot), vehicleMeasurements(snapshot));
   }
   diagnostics(): ModelDiagnostics {
     const at = this.now() - this.t0;
@@ -218,6 +233,7 @@ class VehicleSource implements Source {
     this.visible = v;
     if (this.uds) this.uds.setVisible(v);
   }
+  setView(view: PollingView) { if (this.uds) this.uds.setView(view); }
   dispose() {
     this.disposed = true;
     if (this.timer !== null) clearInterval(this.timer);
@@ -242,6 +258,8 @@ export class NativeModel {
   private epoch = 0;
   private disposed = false;
 
+  private view: PollingView = 'terrain';
+
   constructor(
     private readonly deps: ModelDeps,
     mode: DataMode = DEFAULT_MODE,
@@ -253,7 +271,9 @@ export class NativeModel {
   }
 
   private create(): Source {
-    return this.mode === 'vehicle' ? new VehicleSource(this.deps.watch, this.deps.now, this.deps.log, this.deps.tasu) : new DemoSource(this.scenario, this.deps.now);
+    const source = this.mode === 'vehicle' ? new VehicleSource(this.deps.watch, this.deps.now, this.deps.log, this.deps.tasu) : new DemoSource(this.scenario, this.deps.now);
+    source.setView(this.view);
+    return source;
   }
 
   getState(): NativeState {
@@ -300,6 +320,11 @@ export class NativeModel {
   /** Экран приложения виден (для диагностического чтения). */
   setVisible(v: boolean): void {
     this.source.setVisible(v);
+  }
+
+  setView(view: PollingView): void {
+    this.view = view;
+    this.source.setView(view);
   }
 
   dispose(): void {

@@ -493,6 +493,10 @@ class CombinedRelease(unittest.TestCase):
         cls.bridge_js = write(os.path.join(cls.tmp, 'in', 'bridge.js'), synthetic_bridge_js())
         cls.helper = write(os.path.join(cls.tmp, 'in', 'xop-camrx'), cls.elf)
         cls.node8 = NODE8 if os.path.isfile(NODE8) else None
+        with open(os.path.join(rt.PACKAGING, rt.BRIDGE_ID, 'component.json'), encoding='utf-8') as f:
+            cls.bridge_version = json.load(f)['version']
+        with open(os.path.join(rt.PACKAGING, rt.CAMRX_ID, 'component.json'), encoding='utf-8') as f:
+            cls.camrx_version = json.load(f)['version']
 
     @classmethod
     def tearDownClass(cls):
@@ -508,22 +512,24 @@ class CombinedRelease(unittest.TestCase):
         a, s = self.assemble('a')
         b, _s = self.assemble('b')
         names = sorted(os.listdir(a))
+        source_name = 'xop-camrx-%s-source.tar.gz' % self.camrx_version
         self.assertEqual(names, sorted(['SHA256SUMS', 'catalog.json', 'icon.png', 'mgu-store.json', 'store_fixture@1.2.3.tgz',
-                                        'xop-camera-bridge@0.1.3.tgz', 'xop-camrx@0.1.3.tgz', 'xop-camrx-0.1.3-source.tar.gz']))
+                                        'xop-camera-bridge@%s.tgz' % self.bridge_version,
+                                        'xop-camrx@%s.tgz' % self.camrx_version, source_name]))
         for n in names:
             with open(os.path.join(a, n), 'rb') as fa, open(os.path.join(b, n), 'rb') as fb:
                 self.assertEqual(fa.read(), fb.read(), n)
         with open(os.path.join(a, 'catalog.json'), encoding='utf-8') as f:
             cat = json.load(f)
         by = {c['id']: c for c in cat['components']}
-        self.assertEqual(by['store_fixture']['requires'][rt.BRIDGE_ID], '0.1.3')
+        self.assertEqual(by['store_fixture']['requires'][rt.BRIDGE_ID], self.bridge_version)
         self.assertEqual(by['store_fixture']['requires']['mgu-render'], '0.6.21')
-        self.assertEqual(by[rt.BRIDGE_ID]['requires'][rt.CAMRX_ID], '0.1.3')
+        self.assertEqual(by[rt.BRIDGE_ID]['requires'][rt.CAMRX_ID], self.camrx_version)
         for c in cat['components']:
             self.assertTrue(c['artifact']['url'].startswith('https://github.com/owner/repo/releases/download/v0.1.3/'))
             self.assertTrue(c['uninstallable'])
             self.assertNotIn('optional', c)
-        self.assertEqual(s['source'], 'xop-camrx-0.1.3-source.tar.gz')
+        self.assertEqual(s['source'], source_name)
         _s2, p = v.verify_release(a, self.spec, repository='owner/repo', tag='v0.1.3', node8=self.node8)
         self.assertEqual(list(p), [])
         _s3, p = v.verify_release(a, self.spec, repository='owner/repo', tag='catalog')
@@ -574,7 +580,7 @@ class CombinedRelease(unittest.TestCase):
         with open(moved[0], 'rb') as f:
             self.assertEqual(f.read(), b'{"old": 1}')                     # kept, byte for byte
         self.assertNotIn('catalog 2.json', os.listdir(rel))
-        self.assertEqual(s['tools'][rt.CAMRX_ID]['version'], '0.1.3')
+        self.assertEqual(s['tools'][rt.CAMRX_ID]['version'], self.camrx_version)
         _s, p = v.verify_release(rel, self.spec, repository='owner/repo', tag='v0.1.3')
         self.assertEqual(list(p), [])
 

@@ -467,6 +467,18 @@ describe('рендерер пропал / перезапуск / штатный 
     assert.ok(!Object.keys(r.hmiVisible).some((k) => r.hmiVisible[k]), 'ни одна кнопка HMI не включена');
   };
 
+  const hasTabs = (r: Rig) => {
+    const cv = r.softImages[r.softImages.length - 1];
+    assert.ok(cv, 'программный кадр получен');
+    // Подчёркивание активной вкладки в строке G.frame, отсутствующее в GPU-only chrome.
+    let accent = 0;
+    for (let x = 16; x < 250; x++) {
+      const p = (34 * cv.w + x) * 4;
+      if (cv.d[p] === 0x81 && cv.d[p + 1] === 0xc4 && cv.d[p + 2] === 0xff) accent++;
+    }
+    assert.ok(accent > 50, 'в сохранённом кадре восстановлена строка вкладок');
+  };
+
   it('обрыв соединения: в HMI — сам кадр страницы (без панели), переподключение: снова kit ведёт экран, кадр сразу', async () => {
     const r = await rig({ native: true });
     try {
@@ -478,6 +490,7 @@ describe('рендерер пропал / перезапуск / штатный 
       await flush();
       noPager(r);
       assert.ok(drawn(r.softImages[r.softImages.length - 1]), 'страница в HMI, не пустой экран');
+      hasTabs(r);
       await r.render();
       assert.ok(drawn(r.softImages[r.softImages.length - 1]), 'кадры идут в HMI и во время потери');
       await r.srv.until(() => r.srv.of(MSG.PLACE).length > places && !!r.display.gpu!.ready, 'переподключение', 6000);
@@ -491,6 +504,22 @@ describe('рендерер пропал / перезапуск / штатный 
     } finally {
       await r.close();
     }
+  });
+
+  it('нет подтверждения кадров после запуска: запасной кадр содержит вкладки, восстановление GPU не блокируется', async () => {
+    const r = await rig({ native: true });
+    try {
+      await r.render();
+      const d = r.display as unknown as { shownT: number; tickT: number; softDone: boolean; _softIfNoTick(): void };
+      d.shownT = Date.now() - 2100;
+      d.tickT = 0;
+      d.softDone = false;
+      d._softIfNoTick();
+      await flush();
+      hasTabs(r);
+      noPager(r);
+      assert.ok(r.display.own(), 'запасная картинка сама по себе не отнимает экран у рендерера');
+    } finally { await r.close(); }
   });
 
   it('рендерер ушёл насовсем: программный путь рисует страницу, панели HMI нет (сколько бы ни прошло)', async () => {

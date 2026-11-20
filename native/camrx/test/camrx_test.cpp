@@ -216,14 +216,14 @@ struct Got {
 };
 
 /* A tagged fake access unit: the camera tag SEI before its slice (after SPS/PPS when the unit has them). */
-static std::string unit(const char *sps, bool idr, uint8_t content, int persp, uint8_t app = 51)
+static std::string unit(const char *sps, bool idr, uint8_t content, int persp, uint8_t app = 51, uint8_t b0 = 0)
 {
     const std::string body = fake_msdk::access_unit(sps, idr, content);
     if (persp < 0)
         return body;
     /* the slice is the last NAL unit: its start code is the last 00 00 00 01 */
     const size_t at = body.rfind(std::string("\0\0\0\1", 4));
-    return body.substr(0, at) + sei(0, app, 50, (uint8_t)persp) + body.substr(at);
+    return body.substr(0, at) + sei(b0, app, 50, (uint8_t)persp) + body.substr(at);
 }
 
 static Au au_of(const std::string &s) { return au_from_annexb((const uint8_t *)s.data(), s.size()); }
@@ -773,9 +773,13 @@ static void test_pipeline()
 
     /* frames without a TimeStamp (id 0): nothing is guessed, nothing shown */
     {
+        const auto side_pair = unit("1280x480", true, c10(0), 10, 51, 1);
+        const Run good = run({side_pair});
+        CHECK(count(good, kLeft) == 1 && count(good, kRight) == 1 && count(good, kFront) == 0);
         fake_msdk::timestamps = false;
-        const Run r = run(alternating(2));
-        CHECK(r.got.empty() && r.st.unmatched == 2);
+        const Run r = run({side_pair});
+        CHECK(r.got.empty() && r.st.unmatched == 1);
+        CHECK(r.st.last_w == 1280 && r.st.last_h == 480 && r.st.last_tag.b0 == 1 && r.st.last_tag.perspective == 10);
         fake_msdk::timestamps = true;
     }
 

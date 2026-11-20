@@ -45,7 +45,7 @@ export function udsSupportLines(d: ModelDiagnostics | null): DiagLine[] {
     out.push({ label: `${e.key} ${e.addr}`, value: clip(`${e.state}${e.identity ? ` · F150 ${e.identity}` : ''}${e.reason ? ` · ${e.reason}` : ''}`), tone: e.state === 'accepted' ? 'ok' : 'warn' });
     for (const r of e.records) {
       if (!r.ok && !r.failed) continue;
-      const iv = r.intervalMs === null ? '' : ` · шаг ${r.intervalMs}/${r.maxIntervalMs} мс`;
+      const iv = r.intervalMs === null ? '' : ` · шаг ${Math.round(r.intervalMs)}/${Math.round(r.maxIntervalMs)} мс`;
       out.push({ label: `   ${r.did}`, value: clip(`ok ${r.ok} · ошибок ${r.failed} · период ${r.periodMs}${iv}${r.lastRaw ? ` · ${r.lastRaw}` : ''}${r.lastError ? ` · ${r.lastError}` : ''}`), tone: r.lastError ? 'warn' : 'dim' });
     }
   }

@@ -527,6 +527,11 @@ describe('мост камер: источник кадров', () => {
     assert.match(stallLayer(S({ packets: 900, units: 40, frames: 0, decode_errors: 2 })), /декодер с ошибками/);
     assert.match(stallLayer(S({ packets: 900, units: 40, frames: 30, unlabelled: 30 })), /нет метки камеры/);
     assert.match(stallLayer(S({ packets: 900, units: 40, frames: 30, tag: '1/51/50/7', size: '1280x960' })), /вид не разобран.*метка 1\/51\/50\/7, кадр 1280x960/);
+    const side = { packets: 900, units: 40, frames: 30, tag: '1/51/50/10', size: '1280x480' };
+    assert.match(stallLayer(S({ ...side, unmatched: 30, unlabelled: 1 })), /потерял привязку.*1\/51\/50\/10, кадр 1280x480/);
+    assert.match(stallLayer(S({ ...side, bad_size: 30 })), /неподдерживаемый размер кадра/);
+    assert.match(stallLayer(S({ ...side, not_shown: 30, wait_idr: 30 })), /ждём чистого IDR/);
+    assert.match(stallLayer(S({ ...side, left: 30, right: 30, file_errors: 60 })), /ошибка записи файла/);
     assert.equal(stallLayer(S({ packets: 900, units: 40, frames: 30, front: 15 })), '');
     assert.equal(stallLayer(S({ packets: 100, wait_idr: 0 })), stallLayer(S({ packets: 9999, rtp_lost: 7 })), 'счётчики не меняют причину');
 
@@ -543,6 +548,11 @@ describe('мост камер: источник кадров', () => {
     spawned[0].hooks.onLine('out', S({ packets: 6000, units: 360, wait_idr: 360, tag: '1/51/50/9' }));
     await c.advance(5000);
     assert.ok(p.got.slice(before).every((l) => parseEvent(l.trim())!.reason === last.reason), 'та же причина при новых счётчиках');
+
+    spawned[0].hooks.onLine('out', S({ packets: 7000, units: 420, frames: 60, front: 30, wait_idr: 360 }));
+    spawned[0].hooks.onLine('out', S({ packets: 8000, units: 480, frames: 120, front: 30, wait_idr: 360, unmatched: 60, tag: '1/51/50/10', size: '1280x480' }));
+    await c.advance(1000);
+    assert.match(parseEvent(p.got[p.got.length - 1].trim())!.reason, /декодер потерял привязку кадра/);
   });
 
   it('новое соединение вытесняет прежнее; «start» в течение передачи — источник не перезапускается', async () => {

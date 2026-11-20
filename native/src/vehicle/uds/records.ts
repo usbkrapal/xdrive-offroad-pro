@@ -121,15 +121,18 @@ export const DSC_WHEEL_SPEED: RecordSchema = {
     // на всех четырёх колёсах и движении вперёд (направление опорной 1).
     const allGood = WHEEL_CODES.every((_w, i) => u8(p, 15 + i) > 50 && u8(p, 15 + i) <= 100);
     const ref = values.vehicleKmh;
+    const unknown: Record<string, true> = {};
     WHEEL_CODES.forEach(([, w], i) => {
       if (!allGood || values.directionRef !== 1 || values[`speed.${w}`] === null) {
         values[`deltaPct.${w}`] = null;
         reasons[`deltaPct.${w}`] = !allGood ? 'качество сигнала колёс ≤ 50 %' : values.directionRef !== 1 ? 'не движение вперёд' : 'нет скорости колеса';
+        // Стоянка / задний ход — нормальные условия, в которых эта оценка неприменима, не ошибка датчика.
+        if (allGood && (values.directionRef === 0 || values.directionRef === 2)) unknown[`deltaPct.${w}`] = true;
         return;
       }
       values[`deltaPct.${w}`] = ((s16(p, i * 2) / 100 - ref) / Math.max(ref, 5)) * 100;
     });
-    return { values, reasons };
+    return { values, reasons, unknown };
   },
 };
 
@@ -376,6 +379,42 @@ export const GHAS_OIL: RecordSchema = {
   },
 };
 
+/** GSD_F90 (0F2550), rev 12.302. G07 answered 4012 with 00 03 and 4007 with 0C 79.
+ * https://github.com/emdzej/ediabasx-docs-sgbd/blob/b644de8fbfbb4b207f57794e3c7894dc1dc58627/docs/sgbd/GSD_F90.md
+ */
+function gsdTorque(did: number, name: string, field: 'torqueNm' | 'targetNm'): RecordSchema {
+  return {
+    did, name, length: 2,
+    decode(p) {
+      const raw = u16(p, 0);
+      const value = raw * 0.5 - 1.5;
+      if (raw === 0xffff || (field === 'targetNm' && raw === 0xff) || value > 3000) {
+        return { values: { [field]: null }, reasons: { [field]: 'недопустимый момент блокировки' } };
+      }
+      return { values: { [field]: value }, reasons: NONE };
+    },
+  };
+}
+
+export const GSD_LOCK_TORQUE = gsdTorque(0x4005, 'SPERRMOMENT_IST', 'torqueNm');
+export const GSD_TARGET = gsdTorque(0x4012, 'SPERRMOMENT_VORGABE_AUS_TBC', 'targetNm');
+export const GSD_POSITION: RecordSchema = {
+  did: 0x4007, name: 'POSITION_SPERRE_ABSOLUT', length: 2,
+  decode(p) {
+    const raw = u16(p, 0);
+    return raw === 0xffff ? { values: { positionInc: null }, reasons: { positionInc: 'недопустимо (0xFFFF)' } }
+      : { values: { positionInc: raw - 3000 }, reasons: NONE };
+  },
+};
+export const GSD_DELTA_N: RecordSchema = {
+  did: 0x401b, name: 'DELTA_N_SPERRE', length: 1,
+  decode(p) {
+    const raw = u8(p, 0);
+    return raw === 0xff ? { values: { deltaRpm: null }, reasons: { deltaRpm: 'недопустимо (0xFF)' } }
+      : { values: { deltaRpm: raw * 2 - 256 }, reasons: NONE };
+  },
+};
+
 /** GHAS 400F/4014/4015/4016: группы флагов (unsigned int HEX, таблиц битов нет) — только диагностика, не толкуются. */
 function ghasFlags(did: number, name: string): RecordSchema {
   return {
@@ -452,8 +491,8 @@ export const BDC_LWR_PITCH: RecordSchema = {
 };
 
 /**
- * ACSM 4101 _IMU_WERTE: раскладка байт НЕ установлена (типы EDIABAS не дают смещений; ACSM5/ACSM6 на G07 не
- * подтверждён) — разбора нет: только длина и сырые байты в диагностику.
+ * ACSM 4101 неизвестного варианта: только длина и сырые байты. Разбор 30-байтового ответа ACSM5 ниже
+ * применяется отдельно, после идентификации 0F2040, и остаётся в диагностике.
  */
 export const ACSM_IMU_RAW: RecordSchema = {
   did: 0x4101,
@@ -461,6 +500,34 @@ export const ACSM_IMU_RAW: RecordSchema = {
   length: -1,
   decode(p): DecodedRecord {
     return { values: { length: p.length }, reasons: NONE };
+  },
+};
+
+/** ACSM5 0F2040: RES_0X4101_D / IMU_QUAL, EdiabasX ACSM5 rev 4.000.
+ * https://github.com/emdzej/ediabasx-docs-sgbd/blob/b644de8fbfbb4b207f57794e3c7894dc1dc58627/docs/sgbd/ACSM5.md
+ * G07 фото 2026-11-18: ровно 30 байт, шесть u32 BE + u8, все квалификаторы 2.
+ * Только диагностика: порядок/масштабы согласуются с этим ответом, ориентация осей на машине ещё не сверена.
+ * Это ускорения и скорости вращения, НЕ абсолютные углы. Ни интеграции, ни подстановки в pitch/roll.
+ */
+export const ACSM5_IMU: RecordSchema = {
+  did: 0x4101,
+  name: '_IMU_WERTE (диагностика осей)',
+  length: 30,
+  decode(p): DecodedRecord {
+    const fields = ['accX', 'accY', 'accZ', 'rateX', 'rateY', 'rateZ'];
+    const scales = [0.02, 0.02, 0.02, 0.01, 0.05, 0.005];
+    const offsets = [-41, -41, -20.92, -328, -102.5, -163.84];
+    const values: Record<string, FieldValue> = { length: p.length };
+    const reasons: Record<string, string> = {};
+    fields.forEach((field, i) => {
+      const at = i * 5;
+      const raw = Buffer.from(p.slice(at, at + 4)).readUInt32BE(0);
+      const q = p[at + 4];
+      values[`${field}Qualifier`] = q;
+      values[field] = q === 2 && raw !== 0xffffffff ? raw * scales[i] + offsets[i] : null;
+      if (values[field] === null) reasons[field] = `IMU: квалификатор ${q}, raw ${raw}`;
+    });
+    return { values, reasons };
   },
 };
 

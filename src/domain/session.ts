@@ -70,8 +70,13 @@ function abs(signal: Signal<number>): number | null {
   return v === null ? null : Math.abs(v);
 }
 
+export interface SessionMeasurements {
+  readonly wheelPercent: Readonly<Record<Wheel, number | null>>;
+  readonly heightRange: number | null;
+}
+
 /** Добавляет отсчёт в сессию. Повтор того же simTime (пауза) ничего не меняет. */
-export function ingestSample(session: SessionStats, snapshot: TelemetrySnapshot): SessionStats {
+export function ingestSample(session: SessionStats, snapshot: TelemetrySnapshot, measurements?: SessionMeasurements): SessionStats {
   const t = snapshot.simTimeMs;
   if (session.sampleCount > 0 && t <= session.lastSampleMs) return session;
   const s = snapshot.signals;
@@ -80,7 +85,7 @@ export function ingestSample(session: SessionStats, snapshot: TelemetrySnapshot)
   const maxSlip = { ...session.maxSlip };
   let maxSlipOverall = session.maxSlipOverall;
   for (const w of WHEELS) {
-    const v = usableNumber(s[`wheelSlip.${w}`]);
+    const v = measurements ? measurements.wheelPercent[w] : usableNumber(s[`wheelSlip.${w}`]);
     maxSlip[w] = keepMax(maxSlip[w], v, t);
     if (v !== null && (maxSlipOverall === null || v > maxSlipOverall.value)) {
       maxSlipOverall = { value: v, atMs: t, wheel: w };
@@ -102,13 +107,13 @@ export function ingestSample(session: SessionStats, snapshot: TelemetrySnapshot)
     maxGearboxTemp: keepMax(session.maxGearboxTemp, usableNumber(s['temperature.gearboxC']), t),
     maxOilTemp: keepMax(session.maxOilTemp, usableNumber(s['temperature.engineOilC']), t),
     maxCoolantTemp: keepMax(session.maxCoolantTemp, usableNumber(s['temperature.coolantC']), t),
-    maxHeightRange: keepMax(session.maxHeightRange, heightDeltas(cornerHeights(snapshot)).range, t),
+    maxHeightRange: keepMax(session.maxHeightRange, measurements ? measurements.heightRange : heightDeltas(cornerHeights(snapshot)).range, t),
   };
 }
 
 /** Новая сессия: текущий отсчёт служит первым измерением (его невалидные поля пропускаются). */
-export function createSession(snapshot: TelemetrySnapshot): SessionStats {
-  return ingestSample(emptySession(snapshot.simTimeMs), snapshot);
+export function createSession(snapshot: TelemetrySnapshot, measurements?: SessionMeasurements): SessionStats {
+  return ingestSample(emptySession(snapshot.simTimeMs), snapshot, measurements);
 }
 
 export function sessionElapsedMs(session: SessionStats, nowSimMs: number): number {

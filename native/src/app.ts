@@ -2,7 +2,7 @@
 // Обычный запуск: данные автомобиля (только чтение), без демо, без вкладки «Настройки», без бейджа режима и без нижней
 // строки статуса. На mgu-render/1 с касанием (раскладка «Весь экран») kit сам ведёт экран (cv.own): вкладки касанием,
 // панели HMI нет. Без этого (программная отрисовка, рендерер без mgu-render/1, стандартная раскладка) — запасной путь:
-// две кнопки панели HMI «Далее»/«Назад»; почему касания нет — в журнал приложения.
+// программный кадр страницы без кнопок панели HMI; почему касания нет — в журнал приложения.
 // Доступ разработчика (демо, лист диагностики) — только переменной окружения XOP_DEV при запуске (devAccess.ts).
 
 import type { ScenarioId } from '../../src/domain/types';
@@ -27,6 +27,7 @@ import { T, TAB_LABELS } from './strings';
 import type { TasuSignals } from './vehicle/uds/tasu';
 import * as fs from 'fs';
 import * as net from 'net';
+import type { PollingView } from './vehicle/uds/reader';
 import type { CameraId } from '../../src/screens/cameraPresentation';
 import { CameraFeeds, VIDEO_ID, type FeedDeps } from './camera/feeds';
 import { camPolicy, CameraRequest, type CamApi, type CamPolicy } from './camera/request';
@@ -130,10 +131,15 @@ export function inputLines(display: DisplayApi | undefined): DiagLine[] {
   const g = display && display.gpu;
   const own = !!(display && display.own && display.own());
   const ctl = g && g.info ? g.info.controller : undefined;
+  const yesNo = (v: boolean | null | undefined) => v === undefined || v === null ? 'не сообщил' : v ? 'да' : 'нет';
+  const p = display && display.place;
   return [
     { label: 'Рендерер и управление', value: '', tone: 'head' },
     { label: 'Рендерер', value: !g ? 'нет (программная отрисовка)' : !g.ready ? 'подключение' : g.native ? `mgu-render/1 · касания ${g.touch ? 'да' : 'нет'}` : 'без mgu-render/1', tone: 'dim' },
     { label: 'Экран ведёт kit (касание)', value: own ? 'да' : `нет — ${inputNote(false, display) ?? ''}`, tone: own ? 'dim' : 'warn' },
+    { label: 'Изображение рендерера', value: `на экране: ${yesNo(g && g.onScreen)} · показ запрошен: ${yesNo(g && g.visible)}`, tone: 'dim' },
+    { label: 'Полноэкранный вывод', value: `настройка: ${display?.layout?.() ?? '—'} · уступил штатному экрану: ${yesNo(display?.blocked)}`, tone: display?.blocked ? 'warn' : 'dim' },
+    { label: 'Размер экрана / область приложения', value: `${g?.screen ? `${g.screen.w}×${g.screen.h}` : '—'} / ${p ? `${p.w}×${p.h} (${p.x},${p.y}) · ${p.full ? 'весь экран' : 'стандартная'}` : '—'}`, tone: 'dim' },
     {
       label: 'Контроллер iDrive',
       value: ctl === undefined ? 'рендерер не сообщил' : ctl ? (own ? 'удерживается kit (поворот/нажатие — приложению)' : 'шлюз есть, kit не удерживает') : 'шлюза контроллера нет — поворот, нажатие и наклоны обрабатывает HMI',
@@ -307,7 +313,7 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
     } catch (e) {
       log.error('page ' + page, e);
     }
-    // Запасной путь без касания — в журнал (на экране его видно по панели HMI «Далее»/«Назад»), при смене.
+    // Причина запасного пути без касания — в журнал, только при смене.
     const note = inputNote(!!cv.own, ctx.display);
     if (note !== lastNote) {
       lastNote = note;
@@ -318,6 +324,8 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
 
   const setPage = (i: number) => {
     page = ((i % PAGES.length) + PAGES.length) % PAGES.length;
+    const views: readonly PollingView[] = ['terrain', 'traction', 'suspension', 'systems', 'cameras'];
+    model.setView(views[page]);
     updateCameras();
     kick();
   };

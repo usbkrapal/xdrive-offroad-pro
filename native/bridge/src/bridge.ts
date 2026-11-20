@@ -70,35 +70,58 @@ interface Running {
   showingOurs: boolean;
   /** Где теряются кадры по последней статистике xop-camrx (stallLayer), '' — статистики ещё не было. */
   layer?: string;
+  stats?: Record<string, unknown>;
 }
 
-/**
- * Слой, на котором нет кадров, по строке статистики xop-camrx ({"ev":"stats",…}, раз в 5 с): для причины «stalled»
- * (журнал приложения и лист диагностики разработчика). Только грубый вывод без меняющихся счётчиков, чтобы причина не
- * менялась каждые 5 с; полные строки статистики — в журнале моста. '' — строка не статистика.
- */
-export function stallLayer(line: string): string {
-  if (line.length > 2048 || line.indexOf('"ev":"stats"') < 0) return '';
-  let o: Record<string, unknown>;
+function cameraStats(line: string): Record<string, unknown> | null {
+  if (line.length > 2048 || line.indexOf('"ev":"stats"') < 0) return null;
   try {
-    o = JSON.parse(line) as Record<string, unknown>;
+    const parsed = JSON.parse(line) as Record<string, unknown> | null;
+    return parsed && parsed.ev === 'stats' ? parsed : null;
   } catch {
-    return '';
+    return null;
   }
-  const n = (k: string) => (typeof o[k] === 'number' && Number.isFinite(o[k] as number) ? (o[k] as number) : 0);
+}
+
+/** Диагноз по последнему интервалу (~5 с), а при первом отчёте — с запуска. */
+function describeStall(o: Record<string, unknown>, previous?: Record<string, unknown>): string {
+  const count = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : 0;
+  const n = (k: string) => Math.max(0, count(o[k]) - count(previous && previous[k]));
   const shown = n('front') + n('left') + n('right');
   const tag = typeof o.tag === 'string' && /^[0-9/]{1,20}$/.test(o.tag) ? o.tag : '';
   const size = typeof o.size === 'string' && /^[0-9x]{1,12}$/.test(o.size) ? o.size : '';
   const seen = tag && tag !== '0/0/0/0' ? `; метка ${tag}${size && size !== '0x0' ? `, кадр ${size}` : ''}` : '';
-  if (!n('active')) return 'приёмник AVB не запущен';
+  if (!count(o.active)) return 'приёмник AVB не запущен';
   if (!n('packets')) return 'AVB: пакетов нет (поток камер не идёт или приёмник не подключён)';
   if (!n('units')) return `AVB: пакеты есть, блоков H.264 нет (RTP не разобран${n('rtp_bad') ? `, ошибок RTP ${n('rtp_bad')}` : ''})`;
   if (!n('frames') && n('decode_errors')) return `блоки H.264 есть, декодер с ошибками${seen}`;
   if (!n('frames') && n('wait_idr')) return `блоки H.264 есть, ждём чистого IDR${seen}`;
-  if (!shown && n('unlabelled')) return `блоки H.264 есть, нет метки камеры (SEI)${seen}`;
+  if (!n('frames') && n('unlabelled')) return `блоки H.264 есть, нет метки камеры (SEI)${seen}`;
   if (!n('frames')) return `блоки H.264 есть, декодер кадров не выдаёт${seen}`;
-  if (!shown) return `кадры есть, но вид не разобран (размер/метка)${seen}`;
-  return '';
+  if (shown) return n('file_errors') ? `ошибка записи файла кадров${seen}` : '';
+
+  // Причины ниже относятся к отброшенным кадрам декодера. Для фильтра допуска есть отдельные счётчики блоков H.264.
+  const rejected: [string, string][] = [
+    ['unmatched', 'декодер потерял привязку кадра'],
+    ['corrupted', 'декодер пометил кадры повреждёнными'],
+    ['too_old', 'кадры выходят с опозданием'],
+    ['bad_size', 'неподдерживаемый размер кадра'],
+    ['no_picture', 'декодер не выдал пиксели'],
+    ['duplicate', 'повтор идентификатора кадра'],
+    ['not_shown', 'кадры отсеяны до вывода'],
+  ];
+  const dominant = rejected.reduce<[string, string] | null>((best, entry) =>
+    n(entry[0]) > (best ? n(best[0]) : 0) ? entry : best, null);
+  if (dominant && dominant[0] !== 'not_shown') return `${dominant[1]}${seen}`;
+  if (n('unlabelled')) return `кадры есть, нет метки камеры (SEI)${seen}`;
+  if (n('wait_idr') || n('damaged')) return `кадры есть, ждём чистого IDR${seen}`;
+  if (n('gate_no_view')) return `метка не соответствует видам приложения${seen}`;
+  return `${dominant ? dominant[1] : 'кадры есть, но вид не разобран (размер/метка)'}${seen}`;
+}
+
+export function stallLayer(line: string): string {
+  const stats = cameraStats(line);
+  return stats ? describeStall(stats) : '';
 }
 
 /**
@@ -307,14 +330,15 @@ export class Bridge {
         return;
       }
     }
-    if (r && r.child === child && stream === 'out') {
-      const layer = stallLayer(line);
-      if (layer || line.indexOf('"ev":"stats"') >= 0) r.layer = layer;
+    const stats = r && r.child === child && stream === 'out' && r.spec.id === 'camrx' ? cameraStats(line) : null;
+    if (r && stats) {
+      r.layer = describeStall(stats, r.stats);
+      r.stats = stats;
     }
     const now = this.deps.now();
     if (now - this.lineBudget.at > 60000) this.lineBudget = { at: now, n: 0 };
     if (++this.lineBudget.n > CHILD_LINES_PER_MIN) return;
-    this.deps.log(`${r ? r.spec.id : 'producer'} ${stream}: ${line.replace(/[^\x20-\x7e]/g, '?').slice(0, 200)}`);
+    this.deps.log(`${r ? r.spec.id : 'producer'} ${stream}: ${line.replace(/[^\x20-\x7e]/g, '?').slice(0, stats ? 2048 : 200)}`);
   }
 
   private childExit(child: ChildLike, code: number | null, sig: string | null): void {

@@ -75,10 +75,10 @@
     {
       "path": "kit/runtime/display.js",
       "status": "modified",
-      "sha256": "b0c9b1f9a523818a11ae7cf3825e99e0c19d5e788dfb4400dac11ff0629a7399",
+      "sha256": "2c30eec39c0ee51b187b3f8c23b4912d0ba760a7e1d8d8d4dee17ba400ee34b4",
       "upstreamBlob": "3f68b12ceaea688aa373c564fa90810f552f9832",
       "upstreamSha256": "4ae710fb0fdac75b871c4415ed99a5c926528d823c0dce056c0e5da3837cc158",
-      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video"
+      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback)"
     },
     {
       "path": "kit/runtime/ecus.js",

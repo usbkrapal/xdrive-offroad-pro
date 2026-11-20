@@ -12,7 +12,8 @@ import { DIAL_K } from '../assets/spec';
 import { formatNumber, NONE, presentSource, shownNumber, shownSignal, type Shown } from '../format';
 import { asDomain, type NativeState } from '../model/model';
 import type { ExtraSignal } from '../vehicle/adapter';
-import { EHC_LEVELS, FES_MODES } from '../vehicle/uds/records';
+import { sensorHeightDeltas, usableExtra, wheelDeltaMagnitude } from '../vehicle/derived';
+import { EHC_LEVELS, FES_MODES, GHAS_STATES } from '../vehicle/uds/records';
 import type { Layer, Surface } from '../platform/kitTypes';
 import { T } from '../strings';
 import { BEZEL, drawDialLive, drawDialStatic, FACE, vehicleRotation, type DialKind, type DialTexture } from './dial';
@@ -54,7 +55,6 @@ const shownExtra = (e: ExtraSignal, d: number, signed = false): Shown =>
 /** Код состояния (UDS) → подпись по таблице; код вне таблицы — «—» как недопустимое. */
 const shownCode = (e: ExtraSignal, table: Readonly<Record<number, string>>): Shown =>
   e.quality === 'valid' && e.value !== null && table[e.value] !== undefined ? { text: table[e.value], quality: 'valid', ok: true } : { text: '—', quality: e.quality === 'valid' ? 'invalid' : e.quality, ok: false };
-const usableExtra = (e: ExtraSignal): number | null => (e.quality === 'valid' && e.value !== null && Number.isFinite(e.value) ? e.value : null);
 
 /** Только документированные три уровня EHC; шесть сценарных уровней остаются в демо. */
 export function suspensionReading(state: NativeState): Shown {
@@ -160,8 +160,7 @@ function wheelCard(env: PageEnv, w: Wheel, x: number, y: number, cw: number, ch:
   // Автомобиль: отклонение колеса от опорной скорости DSC (оценка; физического проскальзывания источник не даёт)
   const veh = env.state.mode === 'vehicle';
   const delta = env.state.snapshot.extra[`wheelDelta.${w}`];
-  const dv = veh ? usableExtra(delta) : null;
-  const slip = veh ? (dv === null ? null : Math.abs(dv)) : usableNumber(s[`wheelSlip.${w}`]);
+  const slip = veh ? wheelDeltaMagnitude(env.state.snapshot, w) : usableNumber(s[`wheelSlip.${w}`]);
   readout(cv, x + cw / 2 + 4, y + 58, {
     label: veh ? t.native.extra.wheelDelta : t.traction.slip,
     shown: veh ? shownExtra(delta, 0, true) : shownNumber(s[`wheelSlip.${w}`], 0),
@@ -226,13 +225,22 @@ export function tractionPage(env: PageEnv): void {
   // Дифференциал и ключевые показатели.
   const x3 = xr + cw + GAP;
   const w3 = W - M - x3;
-  const dh = 118;
-  panel(cv, x3, Y0, w3, dh, { title: t.traction.diff });
+  const vehicle = state.mode === 'vehicle';
+  const dh = vehicle ? 142 : 118;
+  panel(cv, x3, Y0, w3, dh, { title: vehicle ? t.native.extra.lockTitle : t.traction.diff });
   if (state.mode === 'vehicle') {
     // GHAS: момент блокировки по чтению (статус, не доказанный факт) и заданный, Н·м; степени в % источник не даёт
     const ex = state.snapshot.extra;
-    readout(cv, x3 + 16, Y0 + 42, { label: t.native.extra.lockTorque, shown: shownExtra(ex['rearLock.torqueNm'], 0), unit: t.units.nm, size: 'md' });
-    readout(cv, x3 + w3 - 16, Y0 + 42, { label: t.native.extra.lockTarget, shown: shownExtra(ex['rearLock.targetNm'], 0), unit: t.units.nm, size: 'md', align: 'right' });
+    readout(cv, x3 + 16, Y0 + 38, { label: t.native.extra.lockTorque, shown: shownExtra(ex['rearLock.torqueNm'], 1), unit: t.units.nm, size: 'md' });
+    readout(cv, x3 + w3 - 16, Y0 + 38, { label: t.native.extra.lockTarget, shown: shownExtra(ex['rearLock.targetNm'], 1), unit: t.units.nm, size: 'md', align: 'right' });
+    const block = shownCode(ex['rearLock.state'], GHAS_STATES);
+    const oil = shownExtra(ex['rearLock.oilC'], 0);
+    text(cv, `${t.native.extra.lockBlock} · ${block.text}`, x3 + 16, Y0 + 105, 14, block.ok ? C.text : C.dim);
+    text(cv, `${t.native.extra.lockOil} · ${oil.text}${oil.ok ? ` ${t.units.celsius}` : ''}`, x3 + w3 - 16, Y0 + 105, 14, oil.ok ? C.text : C.dim, { align: 'right' });
+    const position = shownExtra(ex['rearLock.positionInc'], 0);
+    const speedDelta = shownExtra(ex['rearLock.deltaRpm'], 0);
+    text(cv, `${t.native.extra.lockPosition} · ${position.text}${position.ok ? ` ${t.native.extra.lockIncrement}` : ''}`, x3 + 16, Y0 + 128, 14, position.ok ? C.text : C.dim);
+    text(cv, `${t.native.extra.lockSpeedDelta} · ${speedDelta.text}${speedDelta.ok ? ` ${t.units.rpm}` : ''}`, x3 + w3 - 16, Y0 + 128, 14, speedDelta.ok ? C.text : C.dim, { align: 'right' });
   } else {
     readout(cv, x3 + 16, Y0 + 42, { label: t.traction.diffState, shown: shownSignal(s['rearDiff.lockState'], (v) => t.diffLock[v]), size: 'md' });
     readout(cv, x3 + w3 - 16, Y0 + 42, { label: t.traction.diffPercent, shown: shownNumber(s['rearDiff.lockPercent'], 0), unit: t.units.percent, size: 'md', align: 'right' });
@@ -242,17 +250,17 @@ export function tractionPage(env: PageEnv): void {
   const half = (w3 - 32) / 2;
   readout(cv, x3 + 16, ky + 42, { label: t.terrain.speed, shown: shownNumber(s.vehicleSpeedKmh, 1), unit: t.units.km_h, size: 'md' });
   const ses = state.session;
-  const nowMax = maxSlipNow(asDomain(state.snapshot));
+  const nowMax = state.mode === 'vehicle' ? null : maxSlipNow(asDomain(state.snapshot));
   readout(cv, x3 + 16, ky + 112, {
-    label: t.session.maxSlip,
+    label: state.mode === 'vehicle' ? t.native.extra.maxWheelDelta : t.session.maxSlip,
     shown: extremum(ses.maxSlipOverall, 0),
     unit: ses.maxSlipOverall ? `${t.units.percent} ${t.wheels[ses.maxSlipOverall.wheel].short}` : t.units.percent,
     size: 'md',
     hint: nowMax ? `${formatNumber(nowMax.value, 0)} ${t.units.percent} ${t.wheels[nowMax.wheel].short} · ${t.traction.now}` : undefined,
   });
   readout(cv, x3 + 16 + half, ky + 112, { label: t.session.maxTorque, shown: extremum(ses.maxEngineTorque, 0), unit: t.units.nm, size: 'md' });
-  const my = ky + 202;
-  text(cv, t.session.maxSlipWheel, x3 + 16, my, 14, C.dim);
+  const my = ky + (vehicle ? 188 : 202);
+  text(cv, state.mode === 'vehicle' ? t.native.extra.maxWheelDeltaPerWheel : t.session.maxSlipWheel, x3 + 16, my, 14, C.dim);
   WHEELS.forEach((w, i) => {
     const d = extremum(ses.maxSlip[w], 0);
     const px = x3 + 16 + (i % 2) * half;
@@ -266,8 +274,9 @@ export function tractionPage(env: PageEnv): void {
   const ib = ex['brakePressure.tmc'].quality !== 'unavailable' || ex['brakePressure.system'].quality !== 'unavailable';
   const c1 = shownExtra(ex[ib ? 'brakePressure.tmc' : 'brakePressure.circuit1'], 1);
   const c2 = shownExtra(ex[ib ? 'brakePressure.system' : 'brakePressure.circuit2'], 1);
-  readout(cv, x3 + 16, my + 84, { label: ib ? t.native.extra.brakeTmc : t.native.extra.brakeCircuit1, shown: c1, unit: t.units.bar, size: 'sm' });
-  readout(cv, x3 + 16 + half, my + 84, { label: ib ? t.native.extra.brakeSystem : t.native.extra.brakeCircuit2, shown: c2, unit: t.units.bar, size: 'sm' });
+  const pressureY = my + (vehicle ? 74 : 84);
+  readout(cv, x3 + 16, pressureY, { label: ib ? t.native.extra.brakeTmc : t.native.extra.brakeCircuit1, shown: c1, unit: t.units.bar, size: 'sm' });
+  readout(cv, x3 + 16 + half, pressureY, { label: ib ? t.native.extra.brakeSystem : t.native.extra.brakeCircuit2, shown: c2, unit: t.units.bar, size: 'sm' });
 }
 
 /* ============================== Подвеска ============================== */
@@ -287,10 +296,15 @@ function cornerCard(env: PageEnv, w: Wheel, x: number, y: number, cw: number, ch
   const s = env.state.snapshot.signals;
   panel(cv, x, y, cw, ch);
   wheelHead(cv, w, x + 16, y + 34);
-  readout(cv, x + 16, y + ch / 2 - 30, { label: t.suspension.cornerLabel, shown: shownNumber(s[`suspensionHeight.${w}`], 0, true), unit: t.units.mm, size: 'lg' });
-  heightBar(cv, x + cw - 40, y + 50, ch - 80, usableNumber(s[`suspensionHeight.${w}`]));
+  const relative = { label: t.suspension.cornerLabel, shown: shownNumber(s[`suspensionHeight.${w}`], 0, true) };
+  const sensor = { label: t.native.extra.rideHeightSensor, shown: shownExtra(env.state.snapshot.extra[`rideHeightSensor.${w}`], 0, true) };
+  // В машине реально читается DC05. Делаем его главным показанием, сохраняя его физический смысл.
+  const [primary, secondary] = env.state.mode === 'vehicle' ? [sensor, relative] : [relative, sensor];
+  readout(cv, x + 16, y + ch / 2 - 30, { ...primary, unit: t.units.mm, size: 'lg' });
+  const height = env.state.mode === 'vehicle' ? usableExtra(env.state.snapshot.extra[`rideHeightSensor.${w}`]) : usableNumber(s[`suspensionHeight.${w}`]);
+  heightBar(cv, x + cw - 40, y + 50, ch - 80, height);
   // Выход датчика высоты VDP в мм — абсолютная величина датчика, не отклонение от нормального уровня
-  readout(cv, x + 16, y + ch - 62, { label: t.native.extra.rideHeightSensor, shown: shownExtra(env.state.snapshot.extra[`rideHeightSensor.${w}`], 0), unit: t.units.mm, size: 'sm' });
+  readout(cv, x + 16, y + ch - 62, { ...secondary, unit: t.units.mm, size: 'sm' });
 }
 
 /** Схема сверху (topdown-schematic-v2.png): 887 × 1774, центры шин и пружин как в TopDownCar. */
@@ -381,8 +395,9 @@ export function suspensionPage(env: PageEnv): void {
 
   const x3 = xr + cw + GAP;
   const w3 = W - M - x3;
-  panel(cv, x3, Y0, w3, h, { title: t.suspension.deltas });
-  const d = heightDeltas(cornerHeights(asDomain(state.snapshot)));
+  const vehicle = state.mode === 'vehicle';
+  panel(cv, x3, Y0, w3, h, { title: vehicle ? t.native.extra.sensorHeightDeltas : t.suspension.deltas });
+  const d = vehicle ? sensorHeightDeltas(state.snapshot) : heightDeltas(cornerHeights(asDomain(state.snapshot)));
   const mm = (v: number | null): Shown => (v === null ? NONE : { text: formatNumber(v, 0, true), quality: 'valid', ok: true });
   const rows: [string, Shown][] = [
     [t.suspension.frontDelta, mm(d.frontDelta)],

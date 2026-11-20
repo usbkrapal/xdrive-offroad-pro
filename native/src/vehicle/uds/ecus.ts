@@ -10,6 +10,7 @@
 import type { SignalId } from '../../../../src/domain/types';
 import {
   ACSM_IMU_RAW,
+  ACSM5_IMU,
   BDC_FES,
   BDC_LWR_PITCH,
   DSC_PRESSURE,
@@ -21,6 +22,10 @@ import {
   GHAS_POSITION,
   GHAS_STATE,
   GHAS_TARGET,
+  GSD_DELTA_N,
+  GSD_LOCK_TORQUE,
+  GSD_POSITION,
+  GSD_TARGET,
   IB_ABS,
   IB_ASC,
   IB_FDR,
@@ -289,7 +294,18 @@ export const ECUS: readonly EcuSpec[] = [
     key: 'GHAS',
     addr: 0x0f,
     name: 'Блокировка заднего дифференциала (GHAS)',
-    identities: { '0F1720': 'GHAS10 — sgbd_index @4be3e52, записи по EdiabasX ghas10 rev 1.203' },
+    identities: {
+      '0F1720': 'GHAS10 — sgbd_index @4be3e52, записи по EdiabasX ghas10 rev 1.203',
+      '0F2550': 'GSD_F90 — EdiabasX rev 12.302, формат 4012/4007 подтверждён ответами G07',
+    },
+    variants: { '0F2550': [
+      { schema: GHAS_STATE, periodMs: 5000, staleMs: 10000, outputs: [{ value: 'state', target: extra('rearLock.state') }] },
+      ghas(GSD_LOCK_TORQUE, 3000, 'torqueNm', 'rearLock.torqueNm'),
+      ghas(GSD_TARGET, 3000, 'targetNm', 'rearLock.targetNm'),
+      ghas(GSD_POSITION, 5000, 'positionInc', 'rearLock.positionInc'),
+      ghas(GSD_DELTA_N, 5000, 'deltaRpm', 'rearLock.deltaRpm'),
+      ghas(GHAS_OIL, 5000, 'oilC', 'rearLock.oilC'),
+    ] },
     records: [
       { schema: GHAS_STATE, periodMs: 3000, staleMs: 10000, outputs: [{ value: 'state', target: extra('rearLock.state') }] },
       ghas(GHAS_LOCK_TORQUE, 1000, 'torqueNm', 'rearLock.torqueNm'),
@@ -314,9 +330,10 @@ export const ECUS: readonly EcuSpec[] = [
     key: 'ACSM',
     addr: 0x01,
     name: 'Датчик ускорений (ACSM)',
-    // раскладка 4101 не установлена: проверенных вариантов нет — только сырьё в диагностику (раз в 30 с)
-    identities: {},
+    // Схема ускорений/скоростей ACSM5 согласована с 30-байтовым ответом G07. Углы кузова не выводятся.
+    identities: { '0F2040': 'ACSM5 — EdiabasX rev 4.000, 30 байт G07; оси только в диагностике' },
     records: [{ schema: ACSM_IMU_RAW, periodMs: 30000, staleMs: 120000, outputs: [], diagnosticOnly: true }],
+    variants: { '0F2040': [{ schema: ACSM5_IMU, periodMs: 30000, staleMs: 120000, outputs: [], diagnosticOnly: true }] },
   },
 ];
 

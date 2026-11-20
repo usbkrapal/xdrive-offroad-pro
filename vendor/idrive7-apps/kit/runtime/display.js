@@ -533,8 +533,7 @@ class Display {
         const L = this.last;
         if (L && !this.active() && this.ui.isVisible(this.screen.name)) {
             const plain = this.ownable() && !this.blocked;
-            const cv = new Canvas(L.w, L.h);
-            if (plain) cv.clear(this.theme().bg); else play(L.frame.words(), cv);
+            const cv = plain ? new Canvas(L.w, L.h).clear(this.theme().bg) : this._softwareFrame(L);
             Promise.resolve(L.softImage(L.name, cv)).catch(() => {});
         }
         this._hmiBar();
@@ -785,6 +784,10 @@ class Display {
         const words = new Uint32Array(r.words());
         this.last = {
             name, softImage, w: r.w, h: r.h,
+            tabs: r.chrome && r.chrome.tabs ? {
+                tabs: r.chrome.tabs.tabs.slice(), sel: r.chrome.tabs.sel,
+                badges: (r.chrome.tabs.badges || []).slice(),
+            } : null,
             frame: { words: () => words, atlases: new Set(r.atlases), ramps: new Set(r.ramps), layersUsed: new Set(r.layersUsed || []), images: new Set(r.images || []) },
         };
         if (!this.keepTimer) {
@@ -797,6 +800,15 @@ class Display {
         }
     }
 
+    /** GPU chrome uses screen coordinates and is deliberately skipped by software playback.
+     * Rebuild its tabs in the page's reserved top row when replaying a full-screen frame in HMI. */
+    _softwareFrame(last) {
+        const cv = new Canvas(last.w, last.h);
+        play(last.frame.words(), cv);
+        if (last.tabs) G.frame(cv, this.theme(), last.tabs.tabs, last.tabs.sel, last.tabs.badges);
+        return cv;
+    }
+
     /**
      * Shown for 2 s and the renderer has not taken a frame (no tick): it may not be on screen yet (the
      * first app opened after the head unit started showed only the HMI's empty page). The last frame
@@ -807,8 +819,7 @@ class Display {
         if (!L || this.softDone || !this.active() || !this.shownT || Date.now() - this.shownT < 2000 || (this.tickT || 0) > this.shownT) return;
         this.softDone = true;
         this.log.info('display: no frame taken by the renderer 2 s after showing - the last frame drawn in the HMI too');
-        const cv = new Canvas(L.w, L.h);
-        play(L.frame.words(), cv);
+        const cv = this._softwareFrame(L);
         Promise.resolve(L.softImage(L.name, cv)).catch(() => {});
     }
 

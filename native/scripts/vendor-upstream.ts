@@ -62,7 +62,8 @@ export const MODIFIED: Record<string, string> = {
     'Recorder.video(id, x, y, w, h, r) records op 19 only when the recorder allows it (videoOk), play() skips op 19',
   'kit/runtime/display.js':
     "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; " +
-    'canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video',
+    'canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; ' +
+    'software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback)',
 };
 
 /** Добавленные файлы уведомлений (источник — относительно корня проекта или upstream-путь). */
