@@ -147,6 +147,26 @@ AuLabel au_label(const Au &au)
     return out;
 }
 
+bool au_all_intra(const Au &au)
+{
+    bool found = false;
+    for (const NalRef &n : au.nals) {
+        if (n.type == 19 || n.type == 20 || n.type == 21)
+            return false;
+        if (n.type < 1 || n.type > 5)
+            continue;
+        if ((n.type != 1 && n.type != 5) || n.len < 2 || (au.bytes[n.off] & 0x80))
+            return false;
+        Bits bits(&au.bytes[n.off + 1], n.len - 1);
+        uint32_t first_mb = 0, slice_type = 0, pps = 0;
+        if (!bits.ue(&first_mb) || !bits.ue(&slice_type) || !bits.ue(&pps) || pps > 255 ||
+            (slice_type != 2 && slice_type != 7) || (!found && first_mb != 0))
+            return false;
+        found = true;
+    }
+    return found;
+}
+
 const char *verdict_name(LabelVerdict v)
 {
     switch (v) {

@@ -30,8 +30,8 @@ struct Au {
     int first_vcl = -1;           /* index into nals; -1: no slice */
     bool sps = false, idr = false, b = false;
     bool damaged = false;
-    /* the first unit after a start, reset or sender resync: what came before is unknown (packets dropped while
-     * resynchronising may have been references), so nothing is shown until a clean IDR */
+    /* The first unit after a start, reset or sender resync has an unknown reference chain.
+     * P/B pictures wait for IDR; a complete progressive all-I picture can stand alone. */
     bool discontinuity = false;
     bool has_rtp_ts = false;
     uint32_t rtp_ts = 0;
@@ -56,6 +56,8 @@ struct AuLabel {
     int tags = 0;
 };
 AuLabel au_label(const Au &au);
+/* All ordinary AVC slices are I (2/7), with a readable common header. This does not reset reference pictures. */
+bool au_all_intra(const Au &au);
 const char *verdict_name(LabelVerdict v);
 
 }  // namespace xop

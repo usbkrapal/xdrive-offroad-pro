@@ -75,10 +75,10 @@
     {
       "path": "kit/runtime/display.js",
       "status": "modified",
-      "sha256": "dcf69c8d2f7648c30f6fb66fe7dedfab6b82a43c60bbbaa483fdfcfd5f6e3151",
+      "sha256": "1c8c377d94224498cd3cfc99e64fc14a02f0aa40c0e110484ed9caa45875b18c",
       "upstreamBlob": "3f68b12ceaea688aa373c564fa90810f552f9832",
       "upstreamSha256": "4ae710fb0fdac75b871c4415ed99a5c926528d823c0dce056c0e5da3837cc158",
-      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback); continue checking renderer acknowledgements after startup, refresh software fallback on page changes, clear fallback when acknowledgements resume, and reconnect a hidden connection only while its foreground gate confirms this app"
+      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback); continue checking renderer acknowledgements after startup, refresh software fallback on page changes, clear fallback when acknowledgements resume, and reconnect a hidden connection only while its foreground gate confirms this app; coalesce frames while the renderer waits for its tick using one immutable latest snapshot, discard pending commands when the display connection or placement changes, and transfer controller focus to the tab opened by touch; tag cached recordings by GPU connection and placement, keep software fallbacks out of GPU keepalives, and send a current compatible frame before SHOW"
     },
     {
       "path": "kit/runtime/ecus.js",

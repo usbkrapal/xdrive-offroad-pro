@@ -64,7 +64,14 @@ void Pipeline::on_au(const Au &au)
     if (a.label.verdict == LabelVerdict::Ok)
         st_.last_tag = a.label.tag;
     Pending &p = pending_[a.id % kPending];
-    p = Pending{a.id, gate_.recovery_id(), a.show(), false, a.label.tag, au.rx_ms};
+    p = Pending();
+    p.id = a.id;
+    p.recovery_id = gate_.recovery_id();
+    p.show = a.show();
+    p.chain_ok = a.chain_ok;
+    p.intra = a.intra;
+    p.tag = a.label.tag;
+    p.rx_ms = au.rx_ms;
     feed_ = params_;
     const bool params_sps = !params_.empty();
     params_.clear();
@@ -102,10 +109,12 @@ void Pipeline::on_frame(const woc::VideoFrame &f)
          * display-order callback reports this error. Keep that IDR and its dependent frames. */
         for (Pending &q : pending_)
             if (q.id > f.id && q.recovery_id <= f.id && !q.output)
-                q.show = false;
+                q.chain_ok = false;
         return;
     }
-    if (!p.show) {
+    const bool standalone_intra = p.intra && f.progressive;
+    if (!p.show || (!p.chain_ok && !standalone_intra)) {
+        if (p.show && p.intra && !f.progressive) st_.intra_not_progressive++;
         st_.not_shown++;
         return;
     }
@@ -123,6 +132,7 @@ void Pipeline::on_frame(const woc::VideoFrame &f)
         st_.bad_size++;
         return;
     }
+    if (!p.chain_ok && standalone_intra) st_.standalone_intra++;
     for (int i = 0; i < n; i++) {
         const Crop &c = crops[i];
         if (!enabled_[c.view])

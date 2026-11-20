@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Robert Nisipeanu
 // Modified 2026-11-18 for xop-camrx (Terrain Monitor), each marked "xop-camrx" below:
+// Modified 2026-11-20: VideoFrame::progressive reports the decoded input surface's PicStruct before VPP.
 //  - Decoder::given() exposes the access units given to MSDK in the current sequence, read-only;
 //  - Decoder::feed_au(): one access unit framed by the caller (no re-framing by the decoder's NalReader), its
 //    mfxBitstream.TimeStamp the caller's own id; VideoFrame::id is the decode surface's TimeStamp, read when the
@@ -147,6 +148,8 @@ struct VideoFrame {
     /* xop-camrx: the decode surface's mfxFrameData::TimeStamp (feed_au's id for its own access unit, when MSDK
      * carries it). */
     uint64_t id;
+    /* xop-camrx: decoded input surface is a complete progressive frame, before VPP conversion. */
+    bool progressive;
 };
 
 class Decoder {

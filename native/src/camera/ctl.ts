@@ -10,7 +10,7 @@
 export const BRIDGE_ID = 'xop-camera-bridge';
 export const CTL_DIR = `/run/${BRIDGE_ID}`;
 export const CTL_SOCKET = `${CTL_DIR}/ctl.sock`;
-export const CTL_LINE_MAX = 512;
+export const CTL_LINE_MAX = 1024;
 
 /** Виды, которые вообще может отдавать мост (файлы /dev/shm/mgu-video-xop-<вид>). */
 export const BRIDGE_VIEWS = ['front', 'left', 'right', 'rear'] as const;
@@ -44,6 +44,14 @@ export interface CtlEvent {
    */
   readonly accept: readonly number[];
   readonly request: number;
+  readonly recovery?: {
+    readonly idr: number;
+    readonly cleanIdr: number;
+    readonly intra: number;
+    readonly standaloneIntra: number;
+    readonly nonProgressive: number;
+    readonly waitingIdr: boolean;
+  };
 }
 
 /** Строка от приложения → запрос; строка — почему отклонена. */
@@ -80,7 +88,13 @@ export function parseEvent(line: string): CtlEvent | null {
   const producer = (PRODUCERS as readonly unknown[]).indexOf(j.producer) >= 0 ? (j.producer as Producer) : null;
   const views = Array.isArray(j.views) ? BRIDGE_VIEWS.filter((v) => (j.views as unknown[]).indexOf(v) >= 0) : [];
   const accept = Array.isArray(j.accept) ? j.accept.filter((v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 255).slice(0, 12) : [];
-  return { ev: 'state', state: j.state as BridgeState, producer, views, reason: clean(j.reason, 160), frames: count(j.frames, 0xffffffff), accept, request: count(j.request, 255) };
+  const raw = j.recovery && typeof j.recovery === 'object' ? j.recovery as Record<string, unknown> : null;
+  const recovery = raw ? {
+    idr: count(raw.idr, 0xffffffff), cleanIdr: count(raw.cleanIdr, 0xffffffff),
+    intra: count(raw.intra, 0xffffffff), standaloneIntra: count(raw.standaloneIntra, 0xffffffff),
+    nonProgressive: count(raw.nonProgressive, 0xffffffff), waitingIdr: raw.waitingIdr === true,
+  } : undefined;
+  return { ev: 'state', state: j.state as BridgeState, producer, views, reason: clean(j.reason, 160), frames: count(j.frames, 0xffffffff), accept, request: count(j.request, 255), ...(recovery ? { recovery } : {}) };
 }
 
 export const encodeLine = (o: CtlRequest | CtlEvent): string => `${JSON.stringify(o)}\n`;

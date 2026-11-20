@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Bridge, HANDOVER_MS, PRODUCTION_PRODUCERS, socketAccess, stallLayer, type ChildLike, type Deps, type Peer, type SpawnHooks } from '../bridge/src/bridge';
 import { CAMRX, CAMRX_ROOT, CAMRX_SPEC } from '../bridge/src/camcluster';
-import { encodeLine, parseEvent } from '../src/camera/ctl';
+import { CTL_LINE_MAX, encodeLine, parseEvent } from '../src/camera/ctl';
 import { CameraFeeds, type FeedDeps } from '../src/camera/feeds';
 import { arbitrate, ATTACH_READY_MS, camPolicy, CameraRequest, cookieOf, decide, ICAM2, XVIEW, type CamApi, type CamPolicy } from '../src/camera/request';
 import type { WatchOpts, WatchResult } from '../src/platform/kitTypes';
-import { CAMERA_PAGE, startApp } from '../src/app';
+import { cameraLines, CAMERA_PAGE, startApp } from '../src/app';
 import { PRODUCTION } from '../src/devAccess';
 import { fakeCtx, fakeKit, FakeTransport, syntheticAssets } from './helpers';
 
@@ -428,6 +428,26 @@ describe('камеры: запрос вида (ICAM2Proxy)', () => {
 /* ---------------- соединение с мостом ---------------- */
 
 describe('камеры: соединение с мостом — поколения', () => {
+  it('полная русская причина и отдельные счётчики I/IDR доходят до листа поддержки', () => {
+    let hooks: Parameters<FeedDeps['connect']>[1] | undefined;
+    const feeds = new CameraFeeds({
+      connect: (_path, on) => { hooks = on; return { write: () => undefined, end: () => undefined }; },
+      readHeader: () => null, now: () => 0, setTimer: () => () => undefined,
+    });
+    const recovery = { idr: 0, cleanIdr: 0, intra: 120, standaloneIntra: 118, nonProgressive: 2, waitingIdr: true };
+    const line = encodeLine({ ev: 'state', state: 'stalled', producer: 'camrx', views: ['front', 'left', 'right'],
+      reason: 'я'.repeat(160), frames: 0, ...NEED, recovery });
+    assert.ok(Buffer.byteLength(line, 'utf8') > 512 && Buffer.byteLength(line, 'utf8') <= CTL_LINE_MAX);
+    assert.deepEqual(parseEvent(line)!.recovery, recovery);
+    feeds.setWanted(true);
+    hooks!.connect();
+    hooks!.data(line);
+    const lines = cameraLines(feeds, null);
+    assert.ok(lines.some((l) => l.label === 'IDR · целых / получено' && l.value === '0 / 0 · ожидание да'));
+    assert.ok(lines.some((l) => l.label === 'I-кадры · получено / выведено отдельно' && l.value === '120 / 118'));
+    feeds.dispose();
+  });
+
   it('поздний close/data/connect старого сокета не трогает новое соединение', () => {
     const conns: { on: Parameters<FeedDeps['connect']>[1]; written: string[]; ended: boolean }[] = [];
     let now = 0;

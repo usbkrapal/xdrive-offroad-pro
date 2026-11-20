@@ -181,7 +181,7 @@ class Display {
         gpu.on('ready', () => {
             if (this.gpu !== gpu) return;
             this.shownT = Date.now(); this.tickT = 0; this.softDone = false; this.softFrame = null;
-            this.rendererFront = null;
+            this.rendererFront = null; this.pendingFrame = null;
             this._place(); this._syncVisible(); this._grab();
         });
         gpu.on('tick', () => {
@@ -189,6 +189,13 @@ class Display {
             this.tickT = Date.now();
             if (this.softDone) { this.softDone = false; this.softFrame = null; this.bgShown = null; }
             this.tickHandlers.forEach((fn) => fn());
+            // A page change can happen while the renderer still owns the preceding frame. The newest
+            // immutable snapshot wins, unless a tick handler already supplied a newer frame itself.
+            if (this.pendingFrame && !gpu.waiting && this.active() && this._gpuCompatible(this.pendingFrame)) {
+                const latest = this.pendingFrame;
+                this.pendingFrame = null;
+                this._send(latest.name, latest.frame, latest.softImage, true);
+            }
         });
         gpu.on('close', () => { if (this.gpu === gpu) { clearTimeout(this.frontTimer); this.blocked = false; this._lost(); } });
         gpu.on('stats', (s) => { this.gpuStats = s; });
@@ -273,6 +280,8 @@ class Display {
         const tl = this._tabList();
         if (i === tl.settings) { if (!(this.sheet && this.sheet.settings)) this._click('BTN_SETTINGS'); return; }
         const closed = !!this.sheet;
+        this._focus({ k: 'tab:' + i, tab: i });
+        this.ownDown = null; this.tabDown = -1; this.downAt = null; this.dragging = false;
         this.closeSheet();
         if (this.onTab) try { Promise.resolve(this.onTab(i, closed)).catch((e) => this.log.error('tab', e)); } catch (e) { this.log.error('tab', e); }
     }
@@ -535,6 +544,7 @@ class Display {
 
     /** GPU path gone (or off): the HMI's own image shows again - push a frame now. */
     _lost() {
+        this.pendingFrame = null;
         this.lastWords = null; this.bgShown = null;
         this.ui._invalidate && this.ui._invalidate();
         // the HMI's image still shows the plain background: draw the last frame there at once
@@ -614,6 +624,7 @@ class Display {
             }
         }
         this.place = pl;
+        this.pendingFrame = null;
         this.gpu.place(pl);
         this._grab();
         this._hmiBar();
@@ -655,10 +666,17 @@ class Display {
             if (!this.showTimer) {
                 this.showTimer = setTimeout(() => {
                     this.showTimer = null;
-                    if (!this.gpu || this.gpu.visible || !this._shown()) return;
+                    if (!this.gpu || !this.gpu.ready || this.gpu.closed || this.gpu.visible || !this._shown()) return;
+                    // Ask the app for the current layout first. A software fallback or a frame recorded
+                    // before PLACE cannot become a GPU frame merely because the app regained focus.
+                    this.tickHandlers.forEach((fn) => fn());
+                    const L = this.last;
+                    if (!this._gpuCompatible(L)) { this._syncVisible(); return; }
+                    this.lastWords = null; this.pendingFrame = null;
+                    const out = this.app && this.place.full ? this._compose() : L.frame;
+                    this._send(L.name, out, L.softImage, true, true);
                     this.shownT = Date.now(); this.softDone = false;
                     this.gpu.show(true);
-                    this.lastWords = null;
                 }, SHOW_DELAY_MS);
             }
             return;
@@ -743,6 +761,7 @@ class Display {
             return Promise.resolve();
         }
         this.app = null;
+        this.pendingFrame = null;
         this._keep(name, r, softImage);
         // an HMI popup covers the screen the kit runs: the HMI's image stays plain (_lost) meanwhile
         if (this.ownable() && !this.blocked && this.gpu.visible === false && this.ui.isVisible(this.screen.name)) return Promise.resolve();
@@ -752,16 +771,25 @@ class Display {
     }
 
     /** Send a frame to the renderer (skipped when identical to the last one, within a second). */
-    _send(name, out, softImage, force) {
+    _send(name, out, softImage, force, beforeShow) {
         const w = out.words();
         // unchanged frame (parked car, steady values): nothing to send - but at least one a
         // second, the renderer hides an app that goes quiet for 3 s (hung app over the HMI)
         const now = Date.now();
-        if (!force && this.lastWords && now - this.lastSent < 1000 && this.lastWords.length === w.byteLength && Buffer.from(w.buffer, w.byteOffset, w.byteLength).equals(this.lastWords)) return;
+        if (!force && this.lastWords && now - this.lastSent < 1000 && this.lastWords.length === w.byteLength && Buffer.from(w.buffer, w.byteOffset, w.byteLength).equals(this.lastWords)) {
+            // The user returned to the frame already sent before its tick. Cancel the intermediate page.
+            if (this.pendingFrame) { this.pendingFrame = null; this._keep(name, out, softImage); }
+            return;
+        }
+        this._keep(name, out, softImage);
+        if (!beforeShow && this.gpu.waiting && now - this.lastSent < 1000) {
+            this.pendingFrame = this.last;
+            return;
+        }
+        this.pendingFrame = null;
         this.lastSent = now;
         this.gpu.frame(out);
         this.lastWords = Buffer.from(Buffer.from(w.buffer, w.byteOffset, w.byteLength));
-        this._keep(name, out, softImage);
         this._stats();
     }
 
@@ -795,21 +823,27 @@ class Display {
         const words = new Uint32Array(r.words());
         this.last = {
             name, softImage, w: r.w, h: r.h,
+            gpu: this.active() ? this.gpu : null, placement: this.active() ? this.place : null,
             tabs: r.chrome && r.chrome.tabs ? {
                 tabs: r.chrome.tabs.tabs.slice(), sel: r.chrome.tabs.sel,
                 badges: (r.chrome.tabs.badges || []).slice(),
             } : null,
-            frame: { words: () => words, atlases: new Set(r.atlases), ramps: new Set(r.ramps), layersUsed: new Set(r.layersUsed || []), images: new Set(r.images || []) },
+            frame: { w: r.w, h: r.h, textScale: r.textScale, words: () => words, atlases: new Set(r.atlases), ramps: new Set(r.ramps), layersUsed: new Set(r.layersUsed || []), images: new Set(r.images || []) },
         };
+        // Cached commands and resources can outlive the Recorder, which the next render resets.
+        this.last.frame.chrome = this.last.tabs ? { tabs: this.last.tabs } : null;
         if (!this.keepTimer) {
             this.keepTimer = setInterval(() => {
                 // apps that draw only on changes still send a frame every second (renderer watchdog)
-                if (this.last && this.active() && Date.now() - this.lastSent >= 1000) { this.lastSent = Date.now(); this.gpu.frame(this.last.frame); }
+                if (this._gpuCompatible(this.last) && this.active() && Date.now() - this.lastSent >= 1000) this._send(this.last.name, this.last.frame, this.last.softImage, true);
                 this._softIfNoTick();
             }, 500);
             if (this.keepTimer.unref) this.keepTimer.unref();
         }
     }
+
+    /** Only a recording made for this GPU connection and placement can be replayed to it. */
+    _gpuCompatible(last) { return !!(last && last.gpu === this.gpu && last.placement === this.place); }
 
     /** GPU chrome uses screen coordinates and is deliberately skipped by software playback.
      * Rebuild its tabs in the page's reserved top row when replaying a full-screen frame in HMI. */

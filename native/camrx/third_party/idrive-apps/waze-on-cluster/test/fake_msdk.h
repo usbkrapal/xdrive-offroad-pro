@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Robert Nisipeanu
 // Modified 2026-11-18 for xop-camrx (Terrain Monitor): `corrupt` and `stale_stamp` (below) added for adversarial
 // association tests; with both 0 the stand-in behaves as before.
+// Modified 2026-11-20: picture_struct models the decoded input surface independently of VPP output.
 /* A stand-in for the unit's MSDK and libva, for decoder_msdk.cpp on the host.
  *
  * Its stream is not H.264 past the NAL headers: an SPS (type 7) carries its
@@ -59,6 +60,8 @@ extern std::string picture_size;
 extern int delay;
 extern uint8_t swallow;
 extern bool timestamps;
+/* xop-camrx: input surface PicStruct, independent of the VPP output format. */
+extern uint16_t picture_struct;
 
 /* xop-camrx: a picture whose content is `corrupt` comes out with Data.Corrupted set (MSDK's concealment flag); one
  * whose content is `stale_stamp` comes out carrying the TimeStamp of the unit given before it (a stale/duplicate

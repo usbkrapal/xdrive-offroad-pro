@@ -99,6 +99,17 @@ describe('режим по умолчанию и доступ разработч�
 });
 
 describe('отрисовка: строгая поверхность (только методы Recorder)', () => {
+  it('касание вкладки сразу рисует открытую страницу без ожидания следующего тика', () => {
+    const { ctx, app } = launch();
+    const before = ctx.shown.length;
+    ctx.tab!(3);
+    assert.equal(app.page(), 3);
+    assert.ok(ctx.shown.length > before);
+    const cv = ctx.shown[ctx.shown.length - 1].cv as ReturnType<typeof strictSurface>;
+    assert.ok(cv.texts.some((x) => x.s === T.systems.powertrain.toUpperCase()));
+    app.dispose();
+  });
+
   it('демо разработчика: 5 экранов × 5 сценариев рисуются, вкладки и бейдж ДЕМО', async () => {
     for (const sc of SCENARIO_IDS) {
       const { ctx, kit, app } = launch({}, { dev: demo(sc) });

@@ -108,8 +108,8 @@ interface Rig {
 
 const center = (r: Rect) => [r.x + r.w / 2, r.y + r.h / 2] as const;
 
-async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess; caps?: number }): Promise<Rig> {
-  const srv = await FakeRenderer.start({ native: opts.native, touch: opts.touch ?? true, caps: opts.caps ?? 1 | 8 });
+async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess; caps?: number; autoTick?: boolean }): Promise<Rig> {
+  const srv = await FakeRenderer.start({ native: opts.native, autoTick: opts.autoTick ?? true, touch: opts.touch ?? true, caps: opts.caps ?? 1 | 8 });
   const saved: Env = { MGU_RENDERD_SOCKET: process.env.MGU_RENDERD_SOCKET, MGU_RENDERD_PROTO: process.env.MGU_RENDERD_PROTO };
   const env: Env = { MGU_RENDERD_SOCKET: srv.path };
   selectRenderTarget(env); // как main.js: диалект не задаётся
@@ -452,6 +452,150 @@ describe('программный путь / стандартная раскла�
   });
 });
 
+describe('быстрые переключения при занятом рендерере', () => {
+  it('касание переносит фокус во вкладку, а следующий TICK показывает только последний цельный кадр', async () => {
+    const r = await rig({ native: true, autoTick: false });
+    try {
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.SHOW).some((m) => m.payload.readUInt32LE(0) === 1), 'первый кадр показан');
+      const d = r.display as unknown as {
+        focusTab: number | null;
+        focusKey: string | null;
+        pendingFrame: { frame: { words(): Uint32Array }; tabs: { sel: number } } | null;
+        _focus(p: { k: string; tab: number }): void;
+      };
+      d._focus({ k: 'tab:0', tab: 0 });
+      const sent = r.srv.of(MSG.FRAME).length;
+      for (const i of [1, 2, 3, 4, 1, 2, 3, 4, 2, 1, 4, 3]) {
+        const tab = r.display.chromeRec!.tabRects.find((q) => q.i === i)!;
+        const [x, y] = center(tab);
+        await r.tapScreen(x, y);
+        await r.render();
+        assert.equal(r.app.page(), i);
+        assert.equal(d.focusTab, i, 'рамка контроллера следует касанию');
+        assert.equal(d.focusKey, 'tab:' + i);
+        assert.equal(d.pendingFrame!.tabs.sel, i, 'единственный ожидающий кадр содержит текущую вкладку');
+      }
+      assert.equal(r.srv.of(MSG.FRAME).length, sent, 'пока нет TICK, промежуточные страницы не отправляются');
+      const newest = new Uint32Array(d.pendingFrame!.frame.words());
+      // _compose reuses its Recorder. Mutating that storage must not mutate queued commands.
+      const composer = r.display as unknown as { outRec: { reset(): void; clear(c: number): void } };
+      composer.outRec.reset();
+      composer.outRec.clear(0);
+      assert.deepEqual(d.pendingFrame!.frame.words(), newest, 'снимок независим от переиспользуемого Recorder');
+      r.srv.send(MSG.TICK, Buffer.alloc(8));
+      await r.srv.until(() => r.srv.of(MSG.FRAME).length === sent + 1, 'последняя страница после TICK');
+      const nativeNewest = new Uint32Array(newest);
+      for (const op of walkOps(newest).filter((o) => o.op === 18)) {
+        // IMAGE in mgu-render/1 is x/y/w/h/r/id, the source recorder stores id/ver/x/y/w/h.
+        const at = op.at;
+        nativeNewest.set([newest[at + 3], newest[at + 4], newest[at + 5], newest[at + 6], 0, newest[at + 1]], at + 1);
+      }
+      assert.deepEqual(u32(r.srv.of(MSG.FRAME).slice(-1)[0].payload), nativeNewest, 'тело, вкладки и фокус переданы одним целым кадром');
+      assert.equal(d.pendingFrame, null);
+    } finally { await r.close(); }
+  });
+
+  it('перед SHOW отправляет новый цельный кадр даже при ожидании TICK от предыдущего', async () => {
+    const r = await rig({ native: true, autoTick: false });
+    try {
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.FRAME).length > 0, 'первый кадр');
+      r.app.setPage(3);
+      await r.render();
+      const d = r.display as unknown as { pendingFrame: { tabs: { sel: number } } | null; last: { tabs: { sel: number }; frame: { words(): Uint32Array } } };
+      assert.equal(d.pendingFrame!.tabs.sel, 3);
+      await r.srv.until(() => r.srv.of(MSG.SHOW).some((m) => m.payload.readUInt32LE(0) === 1), 'SHOW после кадра');
+      const show = r.srv.msgs.findIndex((m) => m.type === MSG.SHOW && m.payload.readUInt32LE(0) === 1);
+      const framesBeforeShow = r.srv.msgs.slice(0, show).filter((m) => m.type === MSG.FRAME);
+      assert.equal(framesBeforeShow.length, 2, 'новая страница передана до открытия поверхности');
+      assert.equal(d.last.tabs.sel, 3);
+      assert.equal(d.pendingFrame, null, 'новая страница показана сразу, а не ждёт старый TICK');
+    } finally { await r.close(); }
+  });
+
+  it('software-кэш и кадр старого PLACE остаются запасным изображением HMI до новой GPU-отрисовки', async () => {
+    const r = await rig({ native: true, autoTick: false });
+    try {
+      await r.render();
+      r.settings.set('renderer', 'software');
+      await r.render();
+      const d = r.display as unknown as { last: unknown; _gpuCompatible(last: unknown): boolean; _place(): void; _syncVisible(): void };
+      const software = d.last;
+      r.settings.set('renderer', 'auto');
+      await r.srv.until(() => r.srv.conns.length >= 2 && !!r.display.gpu!.ready, 'новое соединение');
+      const connection = r.srv.conns.length - 1;
+      assert.equal(d._gpuCompatible(software), false);
+      // Both SHOW's delay and the keepalive elapse. Neither may replay the HMI canvas as a GPU recording.
+      await new Promise((ok) => setTimeout(ok, 1100));
+      assert.equal(r.srv.of(MSG.FRAME, connection).length, 0);
+      assert.ok(!r.srv.of(MSG.SHOW, connection).some((m) => m.payload.readUInt32LE(0) === 1));
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.SHOW, connection).some((m) => m.payload.readUInt32LE(0) === 1), 'показ после новой отрисовки');
+      assert.ok(d._gpuCompatible(d.last));
+      const gpu = r.display.gpu as unknown as { show(on: boolean): void };
+      gpu.show(false);
+      const before = r.srv.of(MSG.FRAME, connection).length;
+      d._place();
+      assert.equal(d._gpuCompatible(d.last), false, 'старое размещение инвалидировано');
+      d._syncVisible();
+      await new Promise((ok) => setTimeout(ok, 400));
+      assert.equal(r.srv.of(MSG.FRAME, connection).length, before, 'старый PLACE не переигрывается');
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.FRAME, connection).length > before, 'свежий кадр для нового PLACE');
+      assert.ok(d._gpuCompatible(d.last));
+    } finally { await r.close(); }
+  });
+
+  it('лист поддержки остаётся ожидающим кадром, пока фоновая страница обновляется', async () => {
+    const r = await rig({ native: true, autoTick: false });
+    try {
+      r.app.setPage(3);
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.FRAME).length > 0, 'первый кадр');
+      const tab = r.display.chromeRec!.tabRects.find((q) => q.i === 3)!;
+      for (let i = 0; i < 5; i++) await r.tapScreen(...center(tab));
+      assert.ok(r.display.sheet, 'лист поддержки открыт');
+      const d = r.display as unknown as { sheetTimer: NodeJS.Timeout | null; pendingFrame: unknown };
+      clearInterval(d.sheetTimer!);
+      d.sheetTimer = null;
+      const pending = d.pendingFrame;
+      assert.ok(pending);
+      await r.render();
+      assert.equal(d.pendingFrame, pending, 'фоновая телеметрия не подменяет ожидающий лист');
+      const before = r.srv.of(MSG.FRAME).length;
+      r.srv.send(MSG.TICK, Buffer.alloc(8));
+      await r.srv.until(() => r.srv.of(MSG.FRAME).length > before, 'лист после TICK');
+      assert.ok(r.display.sheet);
+      assert.equal(d.pendingFrame, null);
+      r.display.closeSheet();
+      assert.equal(r.display.sheet, null);
+      assert.ok(d.pendingFrame, 'возвращённая страница ожидает следующим кадром');
+    } finally { await r.close(); }
+  });
+
+  it('возврат к уже отправленной странице отменяет промежуточный кадр, потеря соединения сбрасывает очередь', async () => {
+    const r = await rig({ native: true, autoTick: false });
+    try {
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.FRAME).length > 0, 'первый кадр');
+      const d = r.display as unknown as { pendingFrame: unknown; _send(name: string, frame: unknown, soft: unknown, force: boolean): void; last: { name: string; frame: unknown; softImage: unknown } };
+      const original = d.last;
+      r.app.setPage(2);
+      await r.render();
+      assert.ok(d.pendingFrame);
+      d._send(original.name, original.frame, original.softImage, false);
+      assert.equal(d.pendingFrame, null, 'отменённый переход не всплывёт после TICK');
+      r.app.setPage(3);
+      await r.render();
+      assert.ok(d.pendingFrame);
+      r.srv.drop();
+      await r.srv.until(() => !r.display.gpu!.ready, 'потеря соединения');
+      assert.equal(d.pendingFrame, null, 'команды старого соединения не откладываются в новое');
+    } finally { await r.close(); }
+  });
+});
+
 /* ---------------- потеря рендерера: запасной путь без панели HMI ---------------- */
 
 describe('рендерер пропал / перезапуск / штатный экран сверху: страница не пропадает, панели HMI «Далее»/«Назад» нет никогда', () => {
@@ -507,7 +651,7 @@ describe('рендерер пропал / перезапуск / штатный 
   });
 
   it('нет подтверждения кадров после запуска: запасной кадр содержит вкладки, восстановление GPU не блокируется', async () => {
-    const r = await rig({ native: true });
+    const r = await rig({ native: true, autoTick: false });
     try {
       await r.render();
       const d = r.display as unknown as { shownT: number; tickT: number; softDone: boolean; _softIfNoTick(): void };
@@ -523,7 +667,7 @@ describe('рендерер пропал / перезапуск / штатный 
   });
 
   it('после успешного кадра остановка подтверждений обновляет запасную страницу при смене раздела, затем возвращает GPU', async () => {
-    const r = await rig({ native: true });
+    const r = await rig({ native: true, autoTick: false });
     try {
       await r.render();
       r.srv.send(MSG.TICK, Buffer.alloc(8));
@@ -556,7 +700,7 @@ describe('рендерер пропал / перезапуск / штатный 
   });
 
   it('зависший скрытый рендерер переподключается только при подтверждённом foreground приложения', async () => {
-    const r = await rig({ native: true, caps: 1 | 2 | 4 | 8 | 16 });
+    const r = await rig({ native: true, caps: 1 | 2 | 4 | 8 | 16, autoTick: false });
     try {
       await r.render();
       const video = r.display.gpu as unknown as { video(id: number, path: string): boolean };

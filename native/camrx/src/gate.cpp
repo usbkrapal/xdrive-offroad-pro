@@ -11,7 +11,9 @@ Admission AuGate::admit(const Au &au)
     Admission a;
     a.id = ++next_;
     a.label = au_label(au);
+    a.intra = au_all_intra(au);
     st_.admitted++;
+    if (a.intra) st_.intra++;
     if (au.idr) {
         st_.idr++;
         if (!au.damaged) st_.clean_idr++;
@@ -27,13 +29,14 @@ Admission AuGate::admit(const Au &au)
     if (au.idr)
         recovery_id_ = a.id;
     if (need_idr_) {
-        if (!au.idr) {
+        if (!au.idr && !a.intra) {
             a.why = Why::WaitIdr;
             st_.wait_idr++;
             return a;
         }
-        need_idr_ = false;   /* a clean IDR: the references are whole again */
+        if (au.idr) need_idr_ = false;   /* only IDR restores the chain for following P/B pictures */
     }
+    a.chain_ok = !need_idr_;
     if (a.label.verdict != LabelVerdict::Ok) {
         a.why = Why::Label;
         st_.unlabelled++;

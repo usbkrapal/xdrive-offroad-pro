@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Robert Nisipeanu
 // Modified 2026-11-18 for xop-camrx (Terrain Monitor): Decoder::given(), Decoder::feed_au(), Decoder::set_display_order()
 // and VideoFrame::id added (decoder_msdk.h); each change is marked "xop-camrx".
+// Modified 2026-11-20: VideoFrame::progressive reports the decoder input surface's PicStruct before VPP.
 #include "decoder_msdk.h"
 #include "nal_reader.h"
 #include "log.h"
@@ -824,7 +825,8 @@ bool Decoder::State::run_vpp(mfxFrameSurface1 *in, const FrameSink &cb)
     have_last = true;
     /* The decode task finished before the VPP task that read its surface,
      * so its flags are set. */
-    VideoFrame f = {w, h, in->Data.Corrupted, same, same ? nullptr : &pixels, held(in), part, in->Data.TimeStamp};
+    VideoFrame f = {w, h, in->Data.Corrupted, same, same ? nullptr : &pixels, held(in), part, in->Data.TimeStamp,
+                    in->Info.PicStruct == MFX_PICSTRUCT_PROGRESSIVE};
     cb(f);
     return true;
 }
@@ -919,7 +921,8 @@ bool Decoder::State::skip(mfxFrameSurface1 *out, mfxSyncPoint sync, const FrameS
     const mfxStatus sts = MFXVideoCORE_SyncOperation(session, sync, kSyncTimeoutMs);
     if (sts != MFX_ERR_NONE)
         return fail(mfx_error("MFXVideoCORE_SyncOperation", sts));
-    VideoFrame f = {w, h, out->Data.Corrupted, false, nullptr, held(out), part, out->Data.TimeStamp};
+    VideoFrame f = {w, h, out->Data.Corrupted, false, nullptr, held(out), part, out->Data.TimeStamp,
+                    out->Info.PicStruct == MFX_PICSTRUCT_PROGRESSIVE};
     skipped_out = out;
     cb(f);
     return true;

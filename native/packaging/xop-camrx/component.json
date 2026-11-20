@@ -2,7 +2,7 @@
   "_comment": "Source manifest of the xop-camrx tool kit (mgu-store deploy/README.md, 'Artifacts' / 'component.json'). 'from' is relative to the project root; '@generated/<name>' is written by native/scripts/release_tools.py (NOTICE names the corresponding-source asset and its sha256). No units: xop-camera-bridge.service starts the program. 'catalog' goes to catalog.json only.",
   "id": "xop-camrx",
   "kind": "tool",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "title": "Terrain Monitor: приёмник камер",
   "description": "Приёмник камер для Terrain Monitor (GPL-3.0-or-later): принимает поток камер как ещё один получатель и отдаёт переднюю, левую и правую в рендерер. Запускается мостом xop-camera-bridge.",
   "mguHmi": ["ID7"],

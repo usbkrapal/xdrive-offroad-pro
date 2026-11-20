@@ -163,12 +163,14 @@ void print_stats(const Pipeline &p, const Outputs &out, uint64_t queue_drops, ui
            "\"rtp_late\":%llu,\"rtp_dup\":%llu,\"rtp_restarts\":%llu,\"units\":%llu,\"damaged\":%llu,\"wait_idr\":%llu,\"unlabelled\":%llu,\"slice_less\":%llu,"
            "\"frames\":%llu,\"front\":%llu,\"left\":%llu,\"right\":%llu,\"unmatched\":%llu,\"duplicate\":%llu,"
            "\"corrupted\":%llu,\"not_shown\":%llu,\"no_picture\":%llu,\"too_old\":%llu,\"bad_size\":%llu,\"decode_errors\":%llu,"
-           "\"file_errors\":%llu,\"gate_no_view\":%llu,\"idr\":%llu,\"clean_idr\":%llu,\"waiting_idr\":%d,\"tag\":\"%u/%u/%u/%u\",\"size\":\"%ux%u\"}\n",
+           "\"file_errors\":%llu,\"gate_no_view\":%llu,\"idr\":%llu,\"clean_idr\":%llu,\"waiting_idr\":%d,"
+           "\"intra\":%llu,\"standalone_intra\":%llu,\"intra_not_progressive\":%llu,\"tag\":\"%u/%u/%u/%u\",\"size\":\"%ux%u\"}\n",
            active ? 1 : 0, (ull)packets, (ull)queue_drops, (ull)stale, (ull)overloads, (ull)r.bad, (ull)r.lost, (ull)r.late, (ull)r.duplicates, (ull)r.restarts, (ull)s.units,
            (ull)g.damaged, (ull)g.wait_idr, (ull)g.unlabelled, (ull)s.slice_less, (ull)s.frames,
            (ull)s.view_frames[kFront], (ull)s.view_frames[kLeft], (ull)s.view_frames[kRight], (ull)s.unmatched,
            (ull)s.duplicate, (ull)s.corrupted, (ull)s.not_shown, (ull)s.no_picture, (ull)s.too_old, (ull)s.bad_size,
            (ull)s.decode_errors, (ull)out.errors, (ull)g.no_view, (ull)g.idr, (ull)g.clean_idr, p.waiting_idr() ? 1 : 0,
+           (ull)g.intra, (ull)s.standalone_intra, (ull)s.intra_not_progressive,
            s.last_tag.b0, s.last_tag.application, s.last_tag.mode, s.last_tag.perspective,
            s.last_w, s.last_h);
     fflush(stdout);

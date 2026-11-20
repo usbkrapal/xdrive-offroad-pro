@@ -2,7 +2,9 @@
 // Copyright (C) 2026 Terrain Monitor contributors
 /* Which access units may be shown, decided in DECODING order as each unit goes to the decoder (decoder-report.md
  * §4.5): a damaged unit is never shown, and nothing decoded after it either (it may refer to the damage) until a
- * clean IDR unit; at the start and after a reset the same wait applies. A unit's camera label is its own (au.h);
+ * clean IDR unit. A whole all-I unit can be shown independently if the decoded surface is progressive, while
+ * following P/B units still wait for IDR. At the start and after a reset the same wait applies.
+ * A unit's camera label is its own (au.h);
  * an IDR without a label still ends the wait (its references are whole) but is not shown itself, nor is a unit
  * whose label names no view this helper makes (perspective 0, rear alone, > 10). A damaged unit left without any
  * slice (its slices lost) is a lost picture: later ones may refer to it, so it starts the same wait. Ids are
@@ -22,12 +24,14 @@ struct Admission {
     uint64_t id = 0;
     AuLabel label;
     Why why = Why::Label;
+    bool chain_ok = false, intra = false;
     bool show() const { return why == Why::Show; }
 };
 
 struct GateStats {
     uint64_t admitted = 0, shown = 0, damaged = 0, wait_idr = 0, unlabelled = 0, no_view = 0, lost = 0;
     uint64_t idr = 0, clean_idr = 0;
+    uint64_t intra = 0;
 };
 
 class AuGate {

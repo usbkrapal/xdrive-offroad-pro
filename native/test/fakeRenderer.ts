@@ -39,6 +39,8 @@ export interface RenderMsg {
 export interface RendererOpts {
   /** Отвечать на "proto=mgu-render/1" (X_READY, затем READY); false — старый рендерер: только READY. */
   native: boolean;
+  /** Send TICK after FRAME, as a running compositor does. Off for manual backpressure scenarios. */
+  autoTick: boolean;
   /** READY, четвёртое слово: маршрутизация касаний. */
   touch: boolean;
   /** X_READY caps (1 касание, 2 контроллер, 4 front gate, 8 pixmaps). */
@@ -60,7 +62,7 @@ export class FakeRenderer {
     private readonly server: Server,
     opts: Partial<RendererOpts>,
   ) {
-    this.opts = { native: true, touch: true, caps: 1 | 8, pixmapMax: 2048, screen: { w: 1920, h: 720 }, ...opts };
+    this.opts = { native: true, autoTick: false, touch: true, caps: 1 | 8, pixmapMax: 2048, screen: { w: 1920, h: 720 }, ...opts };
   }
 
   static start(opts: Partial<RendererOpts> = {}): Promise<FakeRenderer> {
@@ -89,6 +91,7 @@ export class FakeRenderer {
         buf = buf.subarray(8 + len);
         this.msgs.push({ conn, type, payload });
         if (type === MSG.HELLO) this.hello(s, payload);
+        if (type === MSG.FRAME && this.opts.autoTick) s.write(frame(MSG.TICK, Buffer.alloc(8)));
       }
       const w = this.waiters;
       this.waiters = [];

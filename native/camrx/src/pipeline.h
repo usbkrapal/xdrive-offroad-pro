@@ -8,7 +8,9 @@
  * A file replay (--file, Annex-B) frames units with the decoder's NAL rules instead (no transport damage there).
  *
  * Output rules (decoder-report.md §4.4-4.6): a frame is shown only if its id is a pending one (not shown before),
- * its unit was admitted for showing, MSDK did not flag it Corrupted, and it has a picture of its own. The decoder's
+ * its unit was admitted for showing, MSDK did not flag it Corrupted, and it has a picture of its own. An ordinary
+ * all-I unit can stand alone without an IDR when the decoder reports a progressive input surface, but does not
+ * restore the reference chain for following P/B pictures. The decoder's
  * "same as the last picture" shortcut is turned off (forget_last before every unit): the last picture may be the
  * other pair's. A corrupted output, an unknown or duplicate id are dropped and counted; a corrupted output also
  * withdraws dependent units up to the next clean IDR. A delayed error from an older GOP does not revoke that
@@ -38,6 +40,7 @@ struct PipelineStats {
     uint64_t frames = 0, unmatched = 0, duplicate = 0, corrupted = 0, not_shown = 0, no_picture = 0, bad_size = 0;
     uint64_t view_frames[kViews] = {0, 0, 0};
     uint64_t decode_errors = 0, too_old = 0;
+    uint64_t standalone_intra = 0, intra_not_progressive = 0;
     CameraTag last_tag;
     uint32_t last_w = 0, last_h = 0;
 };
@@ -60,8 +63,8 @@ public:
     /* One access unit as framed by the caller (tests, replay). */
     void push_au(const Au &au);
     void flush();
-    /* "video off": transport, framing, decoder and pending ids start over; the next unit shown is after a clean
-     * IDR. Ids keep counting (never reused). */
+    /* "video off": transport, framing, decoder and pending ids start over; P/B pictures wait for IDR.
+     * Independent progressive all-I pictures retain their separate admission rule. Ids keep counting. */
     void reset();
     void shutdown();
 
@@ -76,6 +79,7 @@ private:
         uint64_t id = 0;
         uint64_t recovery_id = 0;
         bool show = false, output = false;
+        bool chain_ok = false, intra = false;
         CameraTag tag;
         int64_t rx_ms = -1;
     };

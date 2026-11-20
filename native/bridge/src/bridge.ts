@@ -76,6 +76,8 @@ interface Running {
   stats?: Record<string, unknown>;
 }
 
+const statsCount = (v: unknown): number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : 0;
+
 function cameraStats(line: string): Record<string, unknown> | null {
   if (line.length > 2048 || line.indexOf('"ev":"stats"') < 0) return null;
   try {
@@ -88,7 +90,7 @@ function cameraStats(line: string): Record<string, unknown> | null {
 
 /** Диагноз по последнему интервалу (~5 с), а при первом отчёте — с запуска. */
 function describeStall(o: Record<string, unknown>, previous?: Record<string, unknown>): string {
-  const count = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : 0;
+  const count = statsCount;
   const n = (k: string) => Math.max(0, count(o[k]) - count(previous && previous[k]));
   const shown = n('front') + n('left') + n('right');
   const tag = typeof o.tag === 'string' && /^[0-9/]{1,20}$/.test(o.tag) ? o.tag : '';
@@ -117,6 +119,7 @@ function describeStall(o: Record<string, unknown>, previous?: Record<string, unk
   const dominant = rejected.reduce<[string, string] | null>((best, entry) =>
     n(entry[0]) > (best ? n(best[0]) : 0) ? entry : best, null);
   if (dominant && dominant[0] !== 'not_shown') return `${dominant[1]}${seen}`;
+  if (n('intra_not_progressive')) return `I-кадры: декодер не подтвердил целый прогрессивный кадр${seen}`;
   if (n('unlabelled')) return `кадры есть, нет метки камеры (SEI)${seen}`;
   if (n('wait_idr') || n('damaged')) return `кадры есть, ждём чистого IDR${recovery}${seen}`;
   if (n('gate_no_view')) return `метка не соответствует видам приложения${seen}`;
@@ -242,7 +245,13 @@ export class Bridge {
 
   private event(state: BridgeState, reason: string): CtlEvent {
     const r = this.run;
-    return { ev: 'state', state, producer: r ? r.spec.id : null, views: r ? r.views : [], reason, frames: this.frames, accept: r ? r.accept : [], request: r ? r.request : 0 };
+    const s = r && r.stats;
+    const recovery = s ? {
+      idr: statsCount(s.idr), cleanIdr: statsCount(s.clean_idr), intra: statsCount(s.intra),
+      standaloneIntra: statsCount(s.standalone_intra), nonProgressive: statsCount(s.intra_not_progressive),
+      waitingIdr: s.waiting_idr === 1,
+    } : undefined;
+    return { ev: 'state', state, producer: r ? r.spec.id : null, views: r ? r.views : [], reason, frames: this.frames, accept: r ? r.accept : [], request: r ? r.request : 0, ...(recovery ? { recovery } : {}) };
   }
 
   private emit(): void {

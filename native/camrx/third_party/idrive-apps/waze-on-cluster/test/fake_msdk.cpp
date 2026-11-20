@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Robert Nisipeanu
 // Modified 2026-11-18 for xop-camrx (Terrain Monitor): `corrupt` and `stale_stamp` (fake_msdk.h).
+// Modified 2026-11-20: picture_struct models the decoded input surface independently of VPP output.
 #include "fake_msdk.h"
 
 #include <stdio.h>
@@ -19,6 +20,7 @@ std::string picture_size;
 int delay = 0;
 uint8_t swallow = 0;
 bool timestamps = true;
+uint16_t picture_struct = MFX_PICSTRUCT_PROGRESSIVE;   /* xop-camrx */
 uint8_t corrupt = 0, stale_stamp = 0;   /* xop-camrx */
 static mfxU64 prev_stamp = 0;           /* xop-camrx: the TimeStamp of the unit given before */
 int refs = 0;
@@ -220,6 +222,7 @@ mfxStatus MFXVideoDECODE_DecodeFrameAsync(mfxSession, mfxBitstream *bs, mfxFrame
         sscanf(picture_size.c_str(), "%ux%u", &pw, &ph);
     work->Info.CropW = (mfxU16)pw;
     work->Info.CropH = (mfxU16)ph;
+    work->Info.PicStruct = picture_struct;   /* xop-camrx: the decoded input, not VPP's forced output */
     work->Data.Corrupted = (corrupt && u.content == corrupt) ? 1 : 0;   /* xop-camrx */
     work->Data.FrameOrder = u.content;
     work->Data.TimeStamp = timestamps ? bs->TimeStamp : 0;

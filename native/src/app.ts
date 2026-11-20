@@ -157,6 +157,12 @@ export function cameraLines(feeds: CameraFeeds, req: CameraRequest | null): Diag
     { label: 'Камеры', value: '', tone: 'head' },
     { label: 'Мост xop-camera-bridge', value: d.connected ? (b ? `${b.state}${b.producer ? ` · ${b.producer} [${b.views.join(',')}]` : ''}${b.reason ? ` · ${b.reason}` : ''}` : 'подключён') : d.bridgeError ?? (d.wanted ? 'подключение' : 'не нужен (страница не на экране)'), tone: b && b.state === 'running' ? 'dim' : 'warn' },
   ];
+  if (b && b.recovery) {
+    const r = b.recovery;
+    out.push({ label: 'IDR · целых / получено', value: `${r.cleanIdr} / ${r.idr} · ожидание ${r.waitingIdr ? 'да' : 'нет'}`, tone: 'dim' });
+    out.push({ label: 'I-кадры · получено / выведено отдельно', value: `${r.intra} / ${r.standaloneIntra}`, tone: 'dim' });
+    if (r.nonProgressive) out.push({ label: 'Структура I-кадра не подтверждена', value: String(r.nonProgressive), tone: 'warn' });
+  }
   (Object.keys(d.views) as CameraId[]).forEach((id) => out.push({ label: `   ${id}`, value: d.views[id].live ? 'живой' : d.views[id].reason, tone: d.views[id].live ? 'ok' : 'warn' }));
   if (req) {
     const s = req.state;
@@ -342,7 +348,10 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
       openSupport(page === CAMERA_PAGE ? 'cameras' : 'systems');
       return;
     }
-    if (i !== page) setPage(i);
+    if (i !== page) {
+      setPage(i);
+      return render();
+    }
   });
   // Знак приложения в начале шапки (вендорная правка display.js; без неё свойство ни на что не влияет).
   if (ctx.display) ctx.display.brand = HEADER_BRAND;

@@ -279,6 +279,16 @@ static int count(const Run &r, View v, int y = -1)
 static uint8_t c9(int i) { return (uint8_t)(20 + i); }
 static uint8_t c10(int i) { return (uint8_t)(60 + i); }
 static int index_of(uint8_t y) { return y < 60 ? y - 20 : y - 60; }
+
+/* Ordinary non-IDR AVC slice, slice_type 7 (I). The stand-in picture bytes stay unchanged. */
+static std::string intra_unit(const char *sps, uint8_t content, int tag)
+{
+    std::string a = unit(sps, false, content, tag);
+    for (size_t i = 0; i + 5 < a.size(); i++)
+        if (memcmp(a.data() + i, "\0\0\0\1\x41", 5) == 0)
+            a[i + 5] = '\x88';
+    return a;
+}
 /* n units alternating tag 9 / tag 10 (unit 0 an IDR with its SPS; also the units in idrs) */
 static std::vector<std::string> alternating(int n, std::initializer_list<int> idrs = {})
 {
@@ -881,6 +891,56 @@ static void test_age()
     CHECK(c.st.too_old == 0 && c.got.size() == 12);
 }
 
+static void test_non_idr_intra()
+{
+    const std::string whole = intra_unit("1280x480", c9(0), 9);
+    CHECK(au_all_intra(au_of(whole)));
+    CHECK(!au_all_intra(au_of(whole + fake_msdk::access_unit(nullptr, false, c9(1)))));
+    CHECK(!au_all_intra(au_of(whole + std::string("\0\0\0\1\x42\x88\x20", 7))));
+    for (uint8_t type : {19, 20, 21}) {
+        std::string extended("\0\0\0\1", 4);
+        extended += (char)type;
+        extended += '\x80';
+        CHECK(!au_all_intra(au_of(whole + extended)));
+    }
+    CHECK(!au_all_intra(au_of(std::string("\0\0\0\1\x41\x80", 6))));
+    CHECK(!au_all_intra(au_of(std::string("\0\0\0\1\xc1\xb8\x80", 7))));
+    CHECK(au_all_intra(au_of(std::string("\0\0\0\1\x41\xb8\x80", 7))));
+    for (int delay : {0, 2}) {
+        fake_msdk::delay = delay;
+        const Run r = run({intra_unit("1280x480", c9(0), 9), intra_unit(nullptr, c10(1), 10),
+                           unit(nullptr, false, c9(2), 9), intra_unit(nullptr, c9(3), 9)});
+        check_pairs(r);
+        CHECK(count(r, kFront, c9(0)) == 1 && count(r, kLeft, c10(1)) == 1 && count(r, kRight, c10(1)) == 1);
+        CHECK(count(r, kFront, c9(2)) == 0 && count(r, kFront, c9(3)) == 1);
+        CHECK(r.gate.idr == 0 && r.gate.wait_idr >= 1);
+    }
+    fake_msdk::delay = 0;
+    for (uint16_t structure : {0, 2, 4}) {
+        fake_msdk::picture_struct = structure;
+        Run field = run({intra_unit("1280x480", c9(0), 9)});
+        CHECK(field.got.empty() && field.st.intra_not_progressive == 1);
+        Run known = run({unit("1280x480", true, c9(0), 9), intra_unit(nullptr, c10(1), 10)});
+        CHECK(count(known, kFront) == 1 && count(known, kLeft) == 1);
+    }
+    fake_msdk::picture_struct = 1;
+    /* A damaged I picture cannot recover dependent P pictures. A later whole I picture stands alone. */
+    fake_msdk::corrupt = c9(0);
+    Run bad = run({intra_unit("1280x480", c9(0), 9), unit(nullptr, false, c10(1), 10), intra_unit(nullptr, c9(2), 9)});
+    CHECK(bad.st.corrupted == 1 && bad.got.size() == 1 && count(bad, kFront, c9(2)) == 1);
+    fake_msdk::corrupt = 0;
+    for (int delay : {2, 4}) {
+        fake_msdk::delay = delay;
+        fake_msdk::corrupt = c10(1);
+        Run later = run({unit("1280x480", true, c9(0), 9), unit(nullptr, false, c10(1), 10),
+                         intra_unit(nullptr, c9(2), 9), unit(nullptr, false, c10(3), 10), intra_unit(nullptr, c9(4), 9)});
+        CHECK(count(later, kFront, c9(2)) == 1 && count(later, kFront, c9(4)) == 1);
+        CHECK(count(later, kLeft, c10(3)) == 0);
+        fake_msdk::corrupt = 0;
+    }
+    fake_msdk::delay = 0;
+}
+
 int main(int argc, char **argv)
 {
     const std::string dir = argc > 1 ? argv[1] : "/tmp";
@@ -895,6 +955,7 @@ int main(int argc, char **argv)
     test_queue();
     test_pipeline();
     test_age();
+    test_non_idr_intra();
     fprintf(stderr, "%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
