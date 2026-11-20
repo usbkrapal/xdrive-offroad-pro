@@ -20,6 +20,7 @@ export interface UdsOutput {
   /** true — «значения нет» (не опознан, не поддерживается), а не недопустимое значение. */
   readonly absent: boolean;
   readonly reason: string | null;
+  /** Время ответа в шкале снимка/адаптера; одинаково для всех выходов одной записи. */
   readonly at: number;
   readonly staleMs: number;
   readonly field: string;

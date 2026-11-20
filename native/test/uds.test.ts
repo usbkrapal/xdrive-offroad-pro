@@ -4,7 +4,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildManifest } from '../src/manifest';
-import { NativeModel } from '../src/model/model';
+import { asDomain, NativeModel } from '../src/model/model';
+import { VehicleAdapter } from '../src/vehicle/adapter';
+import { sensorHeightDeltas } from '../src/vehicle/derived';
+import { createSession, ingestSample } from '../../src/domain/session';
+import { WHEELS } from '../../src/domain/types';
 import { diagnosticsLines, udsLines } from '../src/render/diagnostics';
 import { ECUS, recordsFor, type EcuSpec } from '../src/vehicle/uds/ecus';
 import { UdsReader, type UdsOutput } from '../src/vehicle/uds/reader';
@@ -280,6 +284,54 @@ async function readerRig(respond: Responder, specs: readonly EcuSpec[] = FIVE) {
 }
 
 describe('UDS: идентификация и планировщик', () => {
+  it('DC05 через транспорт и адаптер сохраняет одно время ответа для разниц и пика подвески', async () => {
+    let clock = 1000;
+    const now = () => ++clock;
+    let heights = [0.018, -0.003, 0.003, 0.010];
+    const f = fakeTasu((_ecu, did) => {
+      if (did === 0xf150) return [[0x0f, 0x1f, 0x50]];
+      if (did === 0xdc06) return [Array(8).fill(0)];
+      if (did === 0xdc31) return [[1, 1, 1, 1]];
+      if (did === 0xdc05) return [heights.flatMap(f32)];
+      return [{ nrc: 0x31 }];
+    });
+    const port = await new ReadOnlyTasu(f.signals, FAST).init();
+    const adapter = new VehicleAdapter(new FakeTransport().watch, now);
+    adapter.start();
+    const outputs: UdsOutput[] = [];
+    const reader = new UdsReader(port, now, (o) => { outputs.push(o); adapter.putUds(o); }, undefined, { specs: ECUS.filter((e) => e.key === 'VDP') });
+    const snapshot = () => ({ simTimeMs: now(), scenarioId: null, signals: adapter.signals(clock), extra: adapter.extras(clock) });
+    const measurements = (s: ReturnType<typeof snapshot>) => ({ heightRange: sensorHeightDeltas(s).range, wheelPercent: { FL: null, FR: null, RL: null, RR: null } });
+    try {
+      for (let i = 0; i < 5; i++) await reader.step();
+      const first = snapshot();
+      const sensors = WHEELS.map((wheel) => first.extra[`rideHeightSensor.${wheel}`]);
+      assert.ok(sensors.every((s) => s.quality === 'valid'));
+      assert.equal(new Set(sensors.map((s) => s.updatedAt)).size, 1, 'каналы одного DC05 имеют общее время, даже когда часы меняются при каждом вызове');
+      assert.equal(sensors[0].updatedAt, outputs.find((o) => o.target.id === 'rideHeightSensor.FL')!.at, 'сохранено время ответа планировщика');
+      const deltas = sensorHeightDeltas(first);
+      for (const [name, expected] of Object.entries({ frontDelta: 21, rearDelta: -7, leftRight: 7, frontRear: 1, range: 21 })) {
+        assert.ok(Math.abs(deltas[name as keyof typeof deltas]! - expected) < 1e-4, name);
+      }
+      const session = createSession(asDomain(first), measurements(first));
+      assert.ok(Math.abs(session.maxHeightRange!.value - 21) < 1e-4);
+
+      heights = [0.020, -0.004, Number.NaN, 0.008];
+      clock += 5000;
+      for (let i = 0; i < 5; i++) await reader.step();
+      const invalid = snapshot();
+      assert.equal(invalid.extra['rideHeightSensor.RL'].quality, 'invalid');
+      assert.equal(sensorHeightDeltas(invalid).range, null, 'непригодный канал не участвует в размахе');
+      const next = ingestSample(session, asDomain(invalid), measurements(invalid));
+      assert.equal(next.maxHeightRange!.value, session.maxHeightRange!.value, 'последний подтверждённый пик сохранён');
+      clock += 10001;
+      assert.equal(sensorHeightDeltas(snapshot()).range, null, 'устаревшие каналы не участвуют в расчёте');
+    } finally {
+      await reader.stop();
+      await adapter.stop();
+    }
+  });
+
   it('сначала идентификация; опознанные EGS/DSC — значения в сигналы; VDP/LMV без доказанного варианта — только диагностика', async () => {
     const { f, r, out, steps } = await readerRig(carResponder());
     await steps(5);

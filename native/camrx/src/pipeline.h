@@ -11,7 +11,8 @@
  * its unit was admitted for showing, MSDK did not flag it Corrupted, and it has a picture of its own. The decoder's
  * "same as the last picture" shortcut is turned off (forget_last before every unit): the last picture may be the
  * other pair's. A corrupted output, an unknown or duplicate id are dropped and counted; a corrupted output also
- * withdraws every unit given after it and waits for a clean IDR. Nothing is ever shown under another unit's label.
+ * withdraws dependent units up to the next clean IDR. A delayed error from an older GOP does not revoke that
+ * recovery IDR. Nothing is ever shown under another unit's label.
  * Age: each unit keeps its first packet's arrival time (monotonic); a frame whose unit arrived more than kMaxAgeMs
  * before it comes out (held by the decoder across an input pause, a unit closed only by the next timestamp, a slow
  * decode) is dropped and counted, never written as fresh.
@@ -67,11 +68,13 @@ public:
     const PipelineStats &stats() const { return st_; }
     const GateStats &gate_stats() const { return gate_.stats(); }
     const RtpAuStats &rtp_stats() const { return rtp_.stats(); }
+    bool waiting_idr() const { return gate_.waiting_idr(); }
     std::string last_error() const { return err_; }
 
 private:
     struct Pending {
         uint64_t id = 0;
+        uint64_t recovery_id = 0;
         bool show = false, output = false;
         CameraTag tag;
         int64_t rx_ms = -1;

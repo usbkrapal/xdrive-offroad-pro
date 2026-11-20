@@ -27,6 +27,7 @@ struct Admission {
 
 struct GateStats {
     uint64_t admitted = 0, shown = 0, damaged = 0, wait_idr = 0, unlabelled = 0, no_view = 0, lost = 0;
+    uint64_t idr = 0, clean_idr = 0;
 };
 
 class AuGate {
@@ -35,15 +36,18 @@ public:
     Admission admit(const Au &au);
     /* A unit without a slice (never given to the decoder): a damaged one starts the wait for an IDR. */
     void no_slice(const Au &au);
-    /* An output frame turned out concealed/corrupted: wait for a clean IDR again. */
-    void damage_seen() { need_idr_ = true; }
+    /* An output frame turned out concealed/corrupted. A newer IDR already submitted in decode order
+     * is independent of that frame, even when display-order output reports the damage later. */
+    void damage_seen(uint64_t id) { if (id >= recovery_id_) need_idr_ = true; }
     /* "video off": start over (wait for an IDR); ids keep counting. */
-    void reset() { need_idr_ = true; }
+    void reset() { need_idr_ = true; recovery_id_ = 0; }
     bool waiting_idr() const { return need_idr_; }
+    uint64_t recovery_id() const { return recovery_id_; }
     const GateStats &stats() const { return st_; }
 
 private:
     uint64_t next_ = 0;
+    uint64_t recovery_id_ = 0;
     bool need_idr_ = true;
     GateStats st_;
 };

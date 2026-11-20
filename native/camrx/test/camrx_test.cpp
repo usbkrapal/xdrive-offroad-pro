@@ -342,7 +342,7 @@ static void test_gate()
     const Admission u = g.admit(ui);
     CHECK(u.why == Why::Label && !g.waiting_idr());   /* an unlabelled clean IDR ends the wait, not shown */
     CHECK(g.admit(p).show());
-    g.damage_seen();
+    g.damage_seen(u.id);
     CHECK(g.admit(p).why == Why::WaitIdr);
     CHECK(g.admit(i).show());
     g.reset();
@@ -748,6 +748,35 @@ static void test_pipeline()
             CHECK(i < 3 || i >= 7);   /* units 3..6 never shown; 7 (IDR) on */
         }
         CHECK(count(r, kFront, c9(2)) == 1 && count(r, kFront, c9(8)) == 1 && count(r, kLeft, c10(9)) == 1);
+        fake_msdk::corrupt = 0;
+    }
+    fake_msdk::delay = 0;
+
+    /* A delayed error in the old GOP must not revoke an already submitted recovery IDR or its pictures. */
+    for (int delay : {1, 2, 4}) {
+        fake_msdk::corrupt = c10(3);
+        fake_msdk::delay = delay;
+        const Run r = run(alternating(12, {4}));
+        check_pairs(r);
+        CHECK(r.st.corrupted == 1);
+        for (const Got &g : r.got)
+            CHECK(index_of(g.y) < 3 || index_of(g.y) >= 4);
+        for (int i = 4; i < 12; i++)
+            CHECK(count(r, i % 2 ? kLeft : kFront, i % 2 ? c10(i) : c9(i)) == 1);
+        fake_msdk::corrupt = 0;
+    }
+    fake_msdk::delay = 0;
+
+    /* The recovery IDR itself can be corrupt. Its GOP stays hidden until a subsequent clean IDR. */
+    for (int delay : {0, 2, 4}) {
+        fake_msdk::corrupt = c9(4);
+        fake_msdk::delay = delay;
+        const Run r = run(alternating(14, {4, 8}));
+        check_pairs(r);
+        CHECK(r.st.corrupted == 1);
+        for (const Got &g : r.got)
+            CHECK(index_of(g.y) < 4 || index_of(g.y) >= 8);
+        CHECK(count(r, kFront, c9(8)) == 1 && count(r, kLeft, c10(9)) == 1);
         fake_msdk::corrupt = 0;
     }
     fake_msdk::delay = 0;

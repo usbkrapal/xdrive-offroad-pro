@@ -379,11 +379,12 @@ export class VehicleAdapter {
 
   /**
    * Отсчёт диагностического чтения (vehicle/uds): доменный сигнал — в общее хранилище с приоритетом ниже SOME/IP,
-   * величина вне домена — в extras. Время — часы адаптера в момент приёма.
+   * величина вне домена — в extras. Все выходы одного ответа сохраняют общее время чтения UDS;
+   * планировщик и адаптер используют одну шкалу времени снимка.
    */
   putUds(o: UdsOutput): void {
     if (!this.active) return;
-    const at = this.now();
+    const at = o.at;
     const seq = ++this.seq;
     this.rev++;
     const s: Sample = { value: o.value, absent: o.absent, at, seq, staleMs: o.staleMs, priority: UDS_PRIORITY, source: 'measured', iface: 'uds', field: o.field, reason: o.reason };

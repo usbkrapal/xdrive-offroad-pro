@@ -9,6 +9,9 @@ import { encodeLine, parseEvent } from '../src/camera/ctl';
 import { CameraFeeds, type FeedDeps } from '../src/camera/feeds';
 import { arbitrate, ATTACH_READY_MS, camPolicy, CameraRequest, cookieOf, decide, ICAM2, XVIEW, type CamApi, type CamPolicy } from '../src/camera/request';
 import type { WatchOpts, WatchResult } from '../src/platform/kitTypes';
+import { CAMERA_PAGE, startApp } from '../src/app';
+import { PRODUCTION } from '../src/devAccess';
+import { fakeCtx, fakeKit, FakeTransport, syntheticAssets } from './helpers';
 
 /* ---------------- ручные таймеры ---------------- */
 
@@ -496,6 +499,92 @@ function bridgeRig() {
 }
 
 describe('мост камер: источник кадров', () => {
+  it('повторное открытие страницы не использует готовность прежнего приёмника', async () => {
+    const f = fakeIcam();
+    const connections: Parameters<FeedDeps['connect']>[1][] = [];
+    const feeds: FeedDeps = {
+      connect: (_path, on) => { connections.push(on); return { write: () => undefined, end: () => undefined }; },
+      readHeader: () => null,
+      now: () => 0,
+      setTimer: () => () => undefined,
+    };
+    const app = startApp(fakeCtx(new FakeTransport(), {}, { own: true }), fakeKit(), syntheticAssets(), () => 0, PRODUCTION, { api: f.api, feeds });
+    try {
+      app.setPage(CAMERA_PAGE);
+      await flush();
+      f.state('IDLE');
+      connections[0].connect();
+      connections[0].data(encodeLine({ ev: 'state', state: 'starting', producer: 'camrx', views: ['front', 'left', 'right'], reason: '', frames: 0, ...NEED }));
+      app.render();
+      await flush();
+      assert.equal(f.named('clientAttach').length, 1);
+      f.named('clientAttach')[0].resolve(42);
+      await flush();
+      f.named('changeState')[0].resolve(0);
+      await flush();
+      app.setPage(0);
+      await flush();
+      f.named('clientDetach')[0].resolve(0);
+      await flush();
+      app.setPage(CAMERA_PAGE);
+      await flush();
+      f.state('IDLE');
+      await flush();
+      assert.equal(f.named('clientAttach').length, 1, 'старое need не запускает камеры до готовности нового соединения');
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it('запрос ICAM2 ждёт регистрации AVB, включая caps до готовности и новый процесс', async () => {
+    const { b, c, spawned } = bridgeRig();
+    const f = fakeIcam();
+    const request = new CameraRequest(f.api, c.now, c.setTimer);
+    request.setWanted(true);
+    await flush();
+    f.state('IDLE');
+    const peer: Peer = {
+      send: (line) => {
+        const ev = parseEvent(String(line).trim());
+        if (ev) request.setNeed(ev.producer ? { accept: ev.accept, request: ev.request } : null);
+      },
+      close: () => undefined,
+    };
+    b.connect(peer);
+    b.data(peer, encodeLine({ op: 'start' }));
+    await flush();
+    assert.equal(f.named('clientAttach').length, 0, 'запуск процесса ещё не означает готовность AVB');
+    spawned[0].hooks.onLine('out', JSON.stringify({ ev: 'caps', views: ['front', 'left', 'right'], accept: [7], request: 7 }));
+    await flush();
+    assert.equal(f.named('clientAttach').length, 0, 'описание формата тоже не подтверждает регистрацию AVB');
+    spawned[0].hooks.onLine('out', '{"ev":"receiver_ready"}');
+    await flush();
+    assert.equal(f.named('clientAttach').length, 1);
+    f.named('clientAttach')[0].resolve(42);
+    await flush();
+    assert.equal(f.named('changeState').length, 1);
+    f.named('changeState')[0].resolve(0);
+    await flush();
+    spawned[0].hooks.onExit(1, null);
+    await flush();
+    assert.equal(f.named('clientDetach').length, 1, 'исчезновение готового источника отпускает свой запрос');
+    f.named('clientDetach')[0].resolve(0);
+    await c.advance(5000);
+    assert.equal(spawned.length, 2);
+    assert.equal(f.named('clientAttach').length, 1, 'новый процесс снова ждёт готовности');
+    spawned[0].hooks.onLine('out', '{"ev":"receiver_ready"}');
+    await flush();
+    assert.equal(f.named('clientAttach').length, 1, 'готовность прежнего процесса больше не действует');
+    spawned[1].hooks.onLine('out', '{"ev":"receiver_ready"}');
+    await flush();
+    assert.equal(f.named('clientAttach').length, 2);
+    request.setWanted(false);
+    f.named('clientAttach')[1].resolve(43);
+    await flush();
+    f.named('clientDetach')[1].resolve(0);
+    b.disconnect(peer);
+  });
+
   it('рабочий набор — только свой xop-camrx (без чужого mgu-camcluster)', () => {
     assert.deepEqual(PRODUCTION_PRODUCERS.map((p) => p.id), ['camrx']);
     assert.deepEqual(CAMRX_SPEC.args.slice(0, 2), ['--stream', 'media_transport.avb_streaming.1']);

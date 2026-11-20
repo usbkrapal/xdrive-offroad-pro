@@ -178,8 +178,18 @@ class Display {
         // mgu-render/1 for every app that draws no pixel images (Doom: "chrome": false)
         const native = this.screen.chrome !== false && process.env.MGU_RENDERD_PROTO !== 'upstream';
         const gpu = this.gpu = new RenderClient(this.spec.id, this.log, Object.assign({ native }, file ? { file } : {}));
-        gpu.on('ready', () => { if (this.gpu !== gpu) return; this._place(); this._syncVisible(); this._grab(); });
-        gpu.on('tick', () => { if (this.gpu === gpu) { this.tickT = Date.now(); this.tickHandlers.forEach((fn) => fn()); } });
+        gpu.on('ready', () => {
+            if (this.gpu !== gpu) return;
+            this.shownT = Date.now(); this.tickT = 0; this.softDone = false; this.softFrame = null;
+            this.rendererFront = null;
+            this._place(); this._syncVisible(); this._grab();
+        });
+        gpu.on('tick', () => {
+            if (this.gpu !== gpu) return;
+            this.tickT = Date.now();
+            if (this.softDone) { this.softDone = false; this.softFrame = null; this.bgShown = null; }
+            this.tickHandlers.forEach((fn) => fn());
+        });
         gpu.on('close', () => { if (this.gpu === gpu) { clearTimeout(this.frontTimer); this.blocked = false; this._lost(); } });
         gpu.on('stats', (s) => { this.gpuStats = s; });
         // mgu-render/1: the renderer shows the app only while its foreground gate has it in front. A screen
@@ -187,6 +197,7 @@ class Display {
         // RHMI uuid, which the gate then ignores) is drawn in the HMI's own image until the gate agrees.
         gpu.on('state', (st) => {
             if (this.gpu !== gpu) return;
+            this.rendererFront = st.front;
             clearTimeout(this.frontTimer);
             if (st.front) {
                 this._ctlRetry(gpu);
@@ -809,18 +820,25 @@ class Display {
         return cv;
     }
 
-    /**
-     * Shown for 2 s and the renderer has not taken a frame (no tick): it may not be on screen yet (the
-     * first app opened after the head unit started showed only the HMI's empty page). The last frame
-     * goes into the HMI's own image too, once; the renderer's surface covers it when it comes.
-     */
+    /** A renderer can stop taking frames after it has already shown the app. Keep the HMI image
+     * current until ticks resume, including page switches during that interval. Only recover a hidden
+     * renderer connection when both the HMI and its own foreground gate still name this app. */
     _softIfNoTick() {
-        const L = this.last;
-        if (!L || this.softDone || !this.active() || !this.shownT || Date.now() - this.shownT < 2000 || (this.tickT || 0) > this.shownT) return;
-        this.softDone = true;
-        this.log.info('display: no frame taken by the renderer 2 s after showing - the last frame drawn in the HMI too');
-        const cv = this._softwareFrame(L);
-        Promise.resolve(L.softImage(L.name, cv)).catch(() => {});
+        const L = this.last, now = Date.now(), lastTick = Math.max(this.shownT || 0, this.tickT || 0);
+        if (!L || !this.active() || !lastTick || now - lastTick < 2000) return;
+        if (!this.softDone) {
+            this.softDone = true;
+            this.log.warn('display: no frame taken by the renderer for 2 s - updating the HMI image until ticks resume');
+        }
+        if (this.softFrame !== L) {
+            this.softFrame = L;
+            const cv = this._softwareFrame(L);
+            Promise.resolve(L.softImage(L.name, cv)).catch(() => {});
+        }
+        if (now - lastTick >= 6000 && this.rendererFront === true && this.gpu.onScreen === false && now - (this.renderRetryT || 0) >= CTL_RETRY_MS) {
+            this.renderRetryT = now;
+            if (this.gpu.reconnect()) this.log.warn('display: renderer hidden while this app is in front and ticks stopped - reconnecting');
+        }
     }
 
     _stats() {

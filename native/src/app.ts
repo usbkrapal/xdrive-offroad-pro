@@ -240,7 +240,12 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
   const updateCameras = () => {
     const on = !disposed && mode === 'vehicle' && page === CAMERA_PAGE && screenVisible;
     feeds.setWanted(on);
-    if (camReq) camReq.setWanted(on);
+    if (camReq) {
+      // Readiness belongs to the current receiver connection. A reopened page must not reuse
+      // the previous process's need while the new AVB receiver is still starting.
+      camReq.setNeed(on ? feeds.need() : null);
+      camReq.setWanted(on);
+    }
     if (!on && videoSent.size) dropVideos();
   };
   const dropVideos = () => {

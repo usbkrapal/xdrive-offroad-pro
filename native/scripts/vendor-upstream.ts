@@ -63,7 +63,8 @@ export const MODIFIED: Record<string, string> = {
   'kit/runtime/display.js':
     "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; " +
     'canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; ' +
-    'software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback)',
+    'software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback); ' +
+    'continue checking renderer acknowledgements after startup, refresh software fallback on page changes, clear fallback when acknowledgements resume, and reconnect a hidden connection only while its foreground gate confirms this app',
 };
 
 /** Добавленные файлы уведомлений (источник — относительно корня проекта или upstream-путь). */

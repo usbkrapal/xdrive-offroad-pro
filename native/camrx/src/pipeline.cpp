@@ -64,7 +64,7 @@ void Pipeline::on_au(const Au &au)
     if (a.label.verdict == LabelVerdict::Ok)
         st_.last_tag = a.label.tag;
     Pending &p = pending_[a.id % kPending];
-    p = Pending{a.id, a.show(), false, a.label.tag, au.rx_ms};
+    p = Pending{a.id, gate_.recovery_id(), a.show(), false, a.label.tag, au.rx_ms};
     feed_ = params_;
     const bool params_sps = !params_.empty();
     params_.clear();
@@ -97,10 +97,11 @@ void Pipeline::on_frame(const woc::VideoFrame &f)
     p.output = true;
     if (f.corrupted) {
         st_.corrupted++;
-        gate_.damage_seen();
-        /* everything given after this frame's unit may refer to it */
+        gate_.damage_seen(f.id);
+        /* A later IDR closes the old reference chain. It may already be pending when a delayed
+         * display-order callback reports this error. Keep that IDR and its dependent frames. */
         for (Pending &q : pending_)
-            if (q.id > f.id && !q.output)
+            if (q.id > f.id && q.recovery_id <= f.id && !q.output)
                 q.show = false;
         return;
     }

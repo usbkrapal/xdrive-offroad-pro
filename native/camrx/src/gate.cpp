@@ -12,6 +12,10 @@ Admission AuGate::admit(const Au &au)
     a.id = ++next_;
     a.label = au_label(au);
     st_.admitted++;
+    if (au.idr) {
+        st_.idr++;
+        if (!au.damaged) st_.clean_idr++;
+    }
     if (au.discontinuity)
         need_idr_ = true;
     if (au.damaged) {
@@ -20,6 +24,8 @@ Admission AuGate::admit(const Au &au)
         st_.damaged++;
         return a;
     }
+    if (au.idr)
+        recovery_id_ = a.id;
     if (need_idr_) {
         if (!au.idr) {
             a.why = Why::WaitIdr;

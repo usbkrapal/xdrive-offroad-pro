@@ -522,6 +522,81 @@ describe('рендерер пропал / перезапуск / штатный 
     } finally { await r.close(); }
   });
 
+  it('после успешного кадра остановка подтверждений обновляет запасную страницу при смене раздела, затем возвращает GPU', async () => {
+    const r = await rig({ native: true });
+    try {
+      await r.render();
+      r.srv.send(MSG.TICK, Buffer.alloc(8));
+      await flush();
+      const d = r.display as unknown as { shownT: number; tickT: number; softDone: boolean; _softIfNoTick(): void };
+      d.shownT = Date.now() - 5000;
+      d.tickT = Date.now() - 2100;
+      d._softIfNoTick();
+      await flush();
+      hasTabs(r);
+      assert.ok(drawn(r.softImages[r.softImages.length - 1]), 'потеря кадров после запуска тоже включает программный кадр');
+      const terrain = Buffer.from(r.softImages[r.softImages.length - 1].d);
+      const count = r.softImages.length;
+      r.app.setPage(2);
+      await r.render();
+      d._softIfNoTick();
+      await flush();
+      assert.ok(r.softImages.length > count, 'смена раздела обновила запасной кадр');
+      const suspension = r.softImages[r.softImages.length - 1];
+      assert.ok(drawn(suspension));
+      assert.ok(!terrain.equals(Buffer.from(suspension.d)), 'видна новая страница подвески');
+      assert.ok(d.softDone);
+      r.srv.send(MSG.TICK, Buffer.alloc(8));
+      await flush();
+      assert.equal(d.softDone, false, 'свежее подтверждение восстанавливает GPU');
+      await r.render();
+      assert.equal(drawn(r.softImages[r.softImages.length - 1]), false, 'под GPU снова чистый фон HMI');
+      noPager(r);
+    } finally { await r.close(); }
+  });
+
+  it('зависший скрытый рендерер переподключается только при подтверждённом foreground приложения', async () => {
+    const r = await rig({ native: true, caps: 1 | 2 | 4 | 8 | 16 });
+    try {
+      await r.render();
+      const video = r.display.gpu as unknown as { video(id: number, path: string): boolean };
+      assert.ok(video.video(101, '/dev/shm/mgu-video-xop-test'));
+      const d = r.display as unknown as { shownT: number; tickT: number; rendererFront: boolean | null; renderRetryT: number; _softIfNoTick(): void };
+      const state = (front: number) => {
+        const p = Buffer.alloc(12);
+        p.writeUInt32LE(front, 8);
+        r.srv.send(0x4d520102, p);
+      };
+      state(0);
+      await flush();
+      d.shownT = Date.now() - 7000; d.tickT = 0;
+      const connections = r.srv.conns.length;
+      d._softIfNoTick();
+      await flush();
+      assert.equal(r.srv.conns.length, connections, 'поверх другого экрана переподключения нет');
+      state(1);
+      await flush();
+      d._softIfNoTick();
+      await r.srv.until(() => r.srv.conns.length > connections && !!r.display.gpu!.ready, 'восстановление соединения');
+      assert.ok(d.renderRetryT > 0);
+      const places = r.srv.of(MSG.PLACE).length;
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.FRAME).some((m) => m.conn === connections), 'кадр после восстановления');
+      assert.ok(r.srv.of(MSG.PLACE).length >= places);
+      assert.ok(r.srv.of(MSG.ATLAS, connections).length, 'шрифты пересланы');
+      assert.ok(r.srv.of(MSG.TEN, connections).length, 'растры пересланы');
+      assert.ok(r.srv.of(13, connections).length, 'регистрация VIDEO переслана');
+      d.shownT = Date.now() - 7000; d.tickT = 0;
+      state(1);
+      await flush();
+      d._softIfNoTick();
+      await flush();
+      assert.equal(r.srv.conns.length, connections + 1, 'повторное переподключение ограничено по времени');
+      assert.ok(r.display.own());
+      noPager(r);
+    } finally { await r.close(); }
+  });
+
   it('рендерер ушёл насовсем: программный путь рисует страницу, панели HMI нет (сколько бы ни прошло)', async () => {
     const r = await rig({ native: true });
     try {

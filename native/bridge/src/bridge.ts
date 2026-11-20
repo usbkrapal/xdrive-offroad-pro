@@ -66,6 +66,9 @@ interface Running {
   views: BridgeView[];
   accept: number[];
   request: number;
+  /** AVB callback registered before the app may ask ICAM2 to start its stream. */
+  receiverReady: boolean;
+  caps?: { accept: number[]; request: number };
   /** Файл состояния mgu-camcluster создан при нашем запуске (его не было до нас). */
   showingOurs: boolean;
   /** Где теряются кадры по последней статистике xop-camrx (stallLayer), '' — статистики ещё не было. */
@@ -91,11 +94,12 @@ function describeStall(o: Record<string, unknown>, previous?: Record<string, unk
   const tag = typeof o.tag === 'string' && /^[0-9/]{1,20}$/.test(o.tag) ? o.tag : '';
   const size = typeof o.size === 'string' && /^[0-9x]{1,12}$/.test(o.size) ? o.size : '';
   const seen = tag && tag !== '0/0/0/0' ? `; метка ${tag}${size && size !== '0x0' ? `, кадр ${size}` : ''}` : '';
+  const recovery = typeof o.clean_idr === 'number' && typeof o.idr === 'number' ? `; IDR ${count(o.clean_idr)}/${count(o.idr)}` : '';
   if (!count(o.active)) return 'приёмник AVB не запущен';
   if (!n('packets')) return 'AVB: пакетов нет (поток камер не идёт или приёмник не подключён)';
   if (!n('units')) return `AVB: пакеты есть, блоков H.264 нет (RTP не разобран${n('rtp_bad') ? `, ошибок RTP ${n('rtp_bad')}` : ''})`;
   if (!n('frames') && n('decode_errors')) return `блоки H.264 есть, декодер с ошибками${seen}`;
-  if (!n('frames') && n('wait_idr')) return `блоки H.264 есть, ждём чистого IDR${seen}`;
+  if (!n('frames') && n('wait_idr')) return `блоки H.264 есть, ждём чистого IDR${recovery}${seen}`;
   if (!n('frames') && n('unlabelled')) return `блоки H.264 есть, нет метки камеры (SEI)${seen}`;
   if (!n('frames')) return `блоки H.264 есть, декодер кадров не выдаёт${seen}`;
   if (shown) return n('file_errors') ? `ошибка записи файла кадров${seen}` : '';
@@ -114,7 +118,7 @@ function describeStall(o: Record<string, unknown>, previous?: Record<string, unk
     n(entry[0]) > (best ? n(best[0]) : 0) ? entry : best, null);
   if (dominant && dominant[0] !== 'not_shown') return `${dominant[1]}${seen}`;
   if (n('unlabelled')) return `кадры есть, нет метки камеры (SEI)${seen}`;
-  if (n('wait_idr') || n('damaged')) return `кадры есть, ждём чистого IDR${seen}`;
+  if (n('wait_idr') || n('damaged')) return `кадры есть, ждём чистого IDR${recovery}${seen}`;
   if (n('gate_no_view')) return `метка не соответствует видам приложения${seen}`;
   return `${dominant ? dominant[1] : 'кадры есть, но вид не разобран (размер/метка)'}${seen}`;
 }
@@ -311,7 +315,8 @@ export class Bridge {
     } catch (e) {
       return this.set('error', `запуск ${spec.id}: ${String(e).slice(0, 100)}`);
     }
-    this.run = { spec, child, views: spec.views.slice(), accept: spec.accept.slice(), request: spec.request, showingOurs: !showingBefore };
+    const receiverReady = spec.id !== 'camrx';
+    this.run = { spec, child, views: spec.views.slice(), accept: receiverReady ? spec.accept.slice() : [], request: receiverReady ? spec.request : 0, receiverReady, showingOurs: !showingBefore };
     child.write('video on\n');
     this.set('starting', `${spec.id}, pid ${child.pid}`);
     if (!this.watchdog) this.armWatchdog();
@@ -319,12 +324,23 @@ export class Bridge {
 
   private childLine(child: ChildLike, stream: 'out' | 'err', line: string): void {
     const r = this.run;
+    if (r && r.child === child && stream === 'out' && r.spec.id === 'camrx' && line.trim() === '{"ev":"receiver_ready"}') {
+      r.receiverReady = true;
+      r.accept = r.caps ? r.caps.accept : r.spec.accept.slice();
+      r.request = r.caps ? r.caps.request : r.spec.request;
+      this.log('camrx: AVB receiver ready');
+      this.emit();
+      return;
+    }
     if (r && r.child === child && stream === 'out' && r.spec.id === 'camrx' && line.indexOf('"caps"') >= 0) {
       const caps = parseCaps(line, r.spec.views);
       if (caps) {
         r.views = caps.views;
-        r.accept = caps.accept;
-        r.request = caps.request;
+        r.caps = { accept: caps.accept, request: caps.request };
+        if (r.receiverReady) {
+          r.accept = caps.accept;
+          r.request = caps.request;
+        }
         this.log(`camrx caps: views ${caps.views.join(',')} accept ${caps.accept.join(',')} request ${caps.request}`);
         this.emit();
         return;

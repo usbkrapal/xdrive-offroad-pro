@@ -49,8 +49,8 @@ export const REQUIRES = {
   'mgu-render': '0.6.21',
   // установщик MGU Store, который ставит инструменты (component.json: kind tool, units, recmgr) — как у пакета инструментов
   'mgu-deploy': '0.8.19',
-  // мост камер (root-служба; сам требует свой приёмник xop-camrx 0.1.4) — native/packaging/xop-camera-bridge/component.json
-  'xop-camera-bridge': '0.1.4',
+  // мост камер (root-служба; сам требует свой приёмник xop-camrx 0.1.5) — native/packaging/xop-camera-bridge/component.json
+  'xop-camera-bridge': '0.1.5',
 } as const;
 
 export function buildManifest(): Record<string, unknown> {
