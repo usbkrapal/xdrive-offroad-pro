@@ -24,7 +24,7 @@ export const TERRAIN = {
 export const DIAL_R = 92;
 
 /** Сцена привода: высота рендера на «Рельефе» и на «Сцеплении». */
-export const XRAY_H_TERRAIN = TERRAIN.stage.h - 4;
+export const XRAY_H_TERRAIN = TERRAIN.stage.h - 30;
 export const XRAY_H_TRACTION = 300;
 
 /** Схема сверху: «Подвеска» (крупно) и «Системы» (в панели шин). */

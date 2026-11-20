@@ -48,7 +48,7 @@ function checkTexts(cv: ReturnType<typeof strictSurface>, where: string): void {
   for (const tc of cv.texts) {
     assert.equal(tc.literal, true, `${where}: текст без literal: «${tc.s}»`);
     if (tc.font === 'num') assert.match(tc.s, NUM_CHARS, `${where}: символ вне цифрового атласа: «${tc.s}»`);
-    assert.ok(tc.size >= 11, `${where}: слишком мелкий текст ${tc.size}px «${tc.s}»`);
+    assert.ok(tc.size >= 16, `${where}: слишком мелкий текст ${tc.size}px «${tc.s}»`);
   }
 }
 
@@ -291,7 +291,7 @@ describe('страницы без руля, без нижней полосы «�
     app.dispose();
     assert.ok(texts.length > 50, `тексты страниц собраны (${texts.length})`);
     assert.ok(texts.indexOf(T.terrain.altitude) >= 0 && texts.indexOf(T.terrain.speed) >= 0, 'проверка не пустая');
-    for (const gone of [T.terrain.steering, T.terrain.steeringHint, T.terrain.sessionTitle, T.suspension.levelScale, T.suspension.unitNote])
+    for (const gone of [T.terrain.steering, T.terrain.steeringHint, T.terrain.sessionTitle, T.suspension.levelScale, T.suspension.unitNote, T.systems.dynamics, T.systems.longG, T.systems.latG, T.systems.yaw])
       assert.ok(texts.indexOf(gone) < 0, `«${gone}» не рисуется`);
   });
 });

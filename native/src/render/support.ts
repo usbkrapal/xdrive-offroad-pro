@@ -57,7 +57,14 @@ export function laneSlopeLines(d: ModelDiagnostics | null): DiagLine[] {
   const out: DiagLine[] = [{ label: 'LaneSlope (сырьё, масштаб неизвестен)', value: '', tone: 'head' }];
   if (!d) return [...out, { label: 'нет', value: 'демо', tone: 'dim' }];
   const shape = d.memberShapes ? d.memberShapes['VehicleModel.LaneSlope'] : undefined;
-  out.push({ label: 'члены', value: clip(shape ?? 'отсчётов ещё не было', 120), tone: shape ? 'dim' : 'warn' });
+  if (shape && shape[0] === '{' && shape[shape.length - 1] === '}') {
+    out.push({ label: 'члены (имя и тип, без значений)', value: '', tone: 'dim' });
+    // На фото одна общая строка скрывала длинные имена квалификаторов, нужные для разбора уклона.
+    // Число членов уже ограничено адаптером; каждая строка помещается в широкой колонке значений.
+    for (const member of shape.slice(1, -1).split(', ').slice(0, 17)) {
+      out.push({ label: '', value: member, tone: 'dim' });
+    }
+  } else out.push({ label: 'члены', value: clip(shape ?? 'отсчётов ещё не было', 120), tone: shape ? 'dim' : 'warn' });
   const last = d.latestSamples.filter((x) => x.field === 'LaneSlope').slice(-1)[0];
   if (last) for (const k of Object.keys(last.values)) out.push({ label: `   ${k}`, value: String(last.values[k]), tone: 'dim' });
   return out;

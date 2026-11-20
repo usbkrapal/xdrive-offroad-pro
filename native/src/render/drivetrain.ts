@@ -29,7 +29,7 @@ import { formatNumber, shownNumber, shownSignal } from '../format';
 import type { Pt, Surface } from '../platform/kitTypes';
 import { T } from '../strings';
 import { C, withA } from './palette';
-import { caps, text } from './ui';
+import { caps, text, width } from './ui';
 
 export const IMG_W = 1122;
 export const IMG_H = 1402;
@@ -560,15 +560,15 @@ function drawAnnotations(cv: Surface, s: SignalMap, box: StageBox, sc: number, o
     cv.circle(X(c.anchor[0]), Y(c.anchor[1]), 3, C.text);
     caps(cv, c.label, left ? leftX : rightX, cy - 8, 13, C.dim, left ? 'left' : 'right');
     c.lines.forEach((ln, i) => {
-      text(cv, ln, left ? leftX : rightX, cy + 16 + i * 20, 17, c.ok ? C.text : C.warn, { align: left ? 'left' : 'right' });
+      text(cv, ln, left ? leftX : rightX, cy + 18 + i * 26, 17, c.ok ? C.text : C.warn, { align: left ? 'left' : 'right' });
     });
   }
   for (const w of WHEELS) {
     const tyre = TYRE[w];
     const x = LEFT(w) ? X(Math.min(tyre.x, 140) - 34) : X(Math.max(tyre.x + tyre.w, 982) + 34);
     const y = Y(tyre.y + tyre.h / 2) + 6;
-    const ruW = cv.textWidth(t.wheels[w].short, 16, { literal: true });
-    const codeW = cv.textWidth(t.wheels[w].code, 11, { literal: true });
+    const ruW = width(cv, t.wheels[w].short, 16);
+    const codeW = width(cv, t.wheels[w].code, 11);
     if (LEFT(w)) {
       text(cv, t.wheels[w].code, x, y, 11, C.dim, { align: 'right' });
       text(cv, t.wheels[w].short, x - codeW - 4, y, 16, C.text, { align: 'right' });
@@ -579,5 +579,5 @@ function drawAnnotations(cv: Surface, s: SignalMap, box: StageBox, sc: number, o
   }
   // Цветовой легенды (момент / буксование / торможение) нет: значения подписаны выносками. Остаётся пояснение
   // к длине пружин стоек — это не цвет, а геометрия.
-  text(cv, t.drivetrain.legendTravel, box.x + 6, box.y + box.h - 2, 12, C.dim);
+  text(cv, t.drivetrain.legendTravel, box.x + 6, box.y + box.h + 22, 12, C.dim);
 }

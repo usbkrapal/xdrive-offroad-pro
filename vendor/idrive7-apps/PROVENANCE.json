@@ -149,9 +149,11 @@
     },
     {
       "path": "kit/runtime/gauges.js",
-      "status": "unchanged",
-      "sha256": "3b0d56a3f2b57fc7e7698cb6a93a705a4ef0017205f2d0d8848cda20ec87ef06",
-      "upstreamBlob": "040ab86080dfbcad94a535b319ef846a36430031"
+      "status": "modified",
+      "sha256": "1ad733d8d364c782e0d69910b0b2b016115204dbf762b148a502df947cdd09ad",
+      "upstreamBlob": "040ab86080dfbcad94a535b319ef846a36430031",
+      "upstreamSha256": "3b0d56a3f2b57fc7e7698cb6a93a705a4ef0017205f2d0d8848cda20ec87ef06",
+      "summary": "page tab fonts and badges enlarged by 20 percent in software and GPU headers, with matching text measurements"
     },
     {
       "path": "kit/runtime/hmi-text.js",

@@ -6,7 +6,8 @@ import { describe, it } from 'node:test';
 import { CAMERA_PAGE, startApp, SYSTEMS_PAGE } from '../src/app';
 import { PRODUCTION } from '../src/devAccess';
 import type { DiagLine } from '../src/render/diagnostics';
-import { SupportTaps, SUPPORT_WINDOW_MS } from '../src/render/support';
+import { laneSlopeLines, SupportTaps, SUPPORT_WINDOW_MS } from '../src/render/support';
+import { memberShape } from '../src/vehicle/adapter';
 import { fakeCtx, fakeKit, FakeTransport, syntheticAssets } from './helpers';
 
 function launch() {
@@ -22,6 +23,26 @@ const lines = (sh: object) => {
 };
 
 describe('лист поддержки (скрытый, для фото с экрана)', () => {
+  it('длинные имена квалификаторов LaneSlope видны полностью отдельными строками, личные поля скрыты', () => {
+    const { app } = launch();
+    const qualifier = 'qualifierActualValueLongitudinalGradientRoadway';
+    const shape = memberShape({
+      crcTiltRoadway: 1,
+      aliveTiltRoadway: 1,
+      actualValueLongitudinalGradientRoadway: 2129,
+      actualValueTransverseGradientRoadway: 2642,
+      [qualifier]: 2,
+      latitude: 55.1,
+      vin: 'WBA0000000',
+    });
+    assert.ok(shape.indexOf(qualifier) > 120, 'нужный член раньше скрывался за обрезкой строки');
+    const d = app.model.diagnostics()!;
+    const rows = laneSlopeLines({ ...d, memberShapes: { 'VehicleModel.LaneSlope': shape } });
+    assert.ok(rows.some((row) => row.value === `${qualifier}:int`), 'полное имя и тип видны на листе');
+    assert.doesNotMatch(JSON.stringify(rows), /latitude|55\.1|WBA0000000|vin/);
+    app.dispose();
+  });
+
   it('счётчик: только та же открытая разрешённая вкладка, 5 касаний за 3 с; другая вкладка и пауза сбрасывают', () => {
     const k = new SupportTaps();
     for (let i = 0; i < 4; i++) assert.equal(k.tap(3, 3, true, i * 100), false);

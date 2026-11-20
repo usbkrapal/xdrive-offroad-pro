@@ -60,6 +60,8 @@ export const MODIFIED: Record<string, string> = {
   'kit/runtime/record.js':
     'makeLayer keeps the pixel images a layer draws (images), so transports upload them before the layer; ' +
     'Recorder.video(id, x, y, w, h, r) records op 19 only when the recorder allows it (videoOk), play() skips op 19',
+  'kit/runtime/gauges.js':
+    'page tab fonts and badges enlarged by 20 percent in software and GPU headers, with matching text measurements',
   'kit/runtime/display.js':
     "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; " +
     'canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; ' +

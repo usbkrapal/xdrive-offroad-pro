@@ -45,8 +45,8 @@ const BAR_H = 34;
 const BAR_W = 13;
 const BAR_GAP = 4;
 const TEXT_GAP = 14;
-const TITLE_SIZE = 25;
-const SUB_SIZE = 16;
+const TITLE_SIZE = 30;
+const SUB_SIZE = 19.2;
 const END = 14;
 const TITLE_OPTS = { font: 'bold' as const, spacing: 0.4, literal: true };
 const SUB_OPTS = { spacing: 0.6, literal: true };
@@ -62,7 +62,7 @@ export const HEADER_BRAND: HeaderBrand = {
     const tx = x + PAD + stripeWidth(BAR_H, BAR_W, BAR_GAP) + TEXT_GAP;
     // две строки внутри 80 px шапки: заголовок над серединой, подзаголовок под ней
     c.text(T.app.title, tx, cy - 3, TITLE_SIZE, C.text, TITLE_OPTS);
-    c.text(T.app.subtitle, tx, cy + 19, SUB_SIZE, C.dim, SUB_OPTS);
+    c.text(T.app.subtitle, tx, cy + 23, SUB_SIZE, C.dim, SUB_OPTS);
   },
 };
 
@@ -74,17 +74,17 @@ export const HEADER_BRAND: HeaderBrand = {
 export function drawPageBrand(cv: Surface, tabRects: readonly { x: number; w: number }[] | null | undefined, badges: readonly { text: string }[], pageW: number): number | null {
   const bopt = { font: 'bold' as const, spacing: 1.5, literal: true };
   // ширина ряда бейджей как в gauges.js badgeRow (h 24, size 18)
-  const badgesW = badges.reduce((a, b) => a + Math.max(24 * 3.5, cv.textWidth(b.text, 18, bopt) + 24) + 24 * 0.4, 0);
+  const badgesW = badges.reduce((a, b) => a + Math.max(24 * 3.5, cv.textWidth(b.text, 21.6, bopt) + 24) + 24 * 0.4, 0);
   const tabsEnd = (tabRects || []).reduce((m, q) => Math.max(m, q.x + q.w), 0);
   const tOpts = { font: 'bold' as const, spacing: 0.3, literal: true };
   const sOpts = { spacing: 0.4, literal: true };
-  const bh = 22;
+  const bh = 32;
   const sw = stripeWidth(bh, 8, 3);
-  const bw = sw + 10 + Math.max(cv.textWidth(T.app.title, 16, tOpts), cv.textWidth(T.app.subtitle, 11, sOpts));
+  const bw = sw + 10 + Math.max(cv.textWidth(T.app.title, 19.2, tOpts), cv.textWidth(T.app.subtitle, 16, sOpts));
   const x = pageW - 16 - badgesW - 16 - bw;
   if (x < tabsEnd + 16) return null;
-  drawStripe(cv, x, 7, bh, 8, 3);
-  cv.text(T.app.title, x + sw + 10, 17, 16, C.text, tOpts);
-  cv.text(T.app.subtitle, x + sw + 10, 31, 11, C.dim, sOpts);
+  drawStripe(cv, x, 2, bh, 8, 3);
+  cv.text(T.app.title, x + sw + 10, 19, 19.2, C.text, tOpts);
+  cv.text(T.app.subtitle, x + sw + 10, 35, 16, C.dim, sOpts);
   return x;
 }

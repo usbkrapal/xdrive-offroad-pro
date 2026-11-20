@@ -245,7 +245,11 @@ describe('лист диагностики на настоящем Recorder kit',
       assert.ok(sh.lines.some((l) => l.label === '      actualValueRPMEngineCrankshaft' && l.value === '1234'), 'новое сырое число после «Обновить»');
       sh.scroll(1e6);
       sh.draw(new Recorder(1600, 520), THEME);
-      assert.ok(sh.offset > 0 && sh.offset <= sh.lines.length * 30, `прокрутка в пределах (${sh.offset})`);
+      const bottom = sh.offset;
+      assert.ok(bottom > 0, 'длинный лист прокручивается');
+      sh.scroll(1e6);
+      sh.draw(new Recorder(1600, 520), THEME);
+      assert.equal(sh.offset, bottom, 'переносы и увеличенные строки ограничивают прокрутку последней строкой');
       sh.scroll(-1e7);
       sh.draw(new Recorder(1600, 520), THEME);
       assert.equal(sh.offset, 0);

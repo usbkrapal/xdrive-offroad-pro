@@ -247,7 +247,7 @@ function getterStats(r: Partial<GetterStats> | undefined): GetterStats | null {
 /** Члены с идентификатором автомобиля / местоположением: их имена в журнал и на лист не попадают. */
 const SENSITIVE_MEMBER = /(^|[^a-z])vin|^vin|vehicleidentification|fahrgestell|chassisnumber|latitude|longitude|gps|coordinat|geopos|geoloc|address/i;
 
-/** Имена и типы членов значения поля (до 16, имена ≤ 40 символов) — без самих значений. */
+/** Имена и типы членов значения поля (до 16, имена ≤ 64 символов) — без самих значений. */
 export function memberShape(v: unknown): string {
   if (v === null || typeof v !== 'object') return typeof v;
   if (Array.isArray(v)) return `array[${v.length}]`;
@@ -256,7 +256,7 @@ export function memberShape(v: unknown): string {
     const x = (v as Record<string, unknown>)[k];
     const t = x === null ? 'null' : Array.isArray(x) ? `array[${x.length}]` : typeof x === 'number' ? (Number.isInteger(x) ? 'int' : 'number') : typeof x;
     // имена членов с идентификатором автомобиля или местоположением не показываются (только тип)
-    const name = SENSITIVE_MEMBER.test(k) ? '[скрыто]' : k.replace(/[^\w.]/g, '?').slice(0, 40);
+    const name = SENSITIVE_MEMBER.test(k) ? '[скрыто]' : k.replace(/[^\w.]/g, '?').slice(0, 64);
     return `${name}:${t}`;
   });
   return `{${parts.join(', ')}${keys.length > 16 ? `, …+${keys.length - 16}` : ''}}`;

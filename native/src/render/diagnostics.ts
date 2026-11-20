@@ -9,6 +9,7 @@ import type { FieldDiagnostics, GearboxOilState, GetterStats, InterfaceDiagnosti
 import { formatNumber } from '../format';
 import type { UdsDiagnosticsSnapshot } from '../model/model';
 import { C } from './palette';
+import { text, wrapText } from './ui';
 
 export type Tone = 'head' | 'ok' | 'warn' | 'dim';
 export interface DiagLine {
@@ -207,7 +208,9 @@ export function diagnosticsLines(d: (VehicleDiagnostics & { readonly uds?: UdsDi
 const PAGE_W = 1600;
 const TOP = 46;
 const BOTTOM = 512;
-const LINE_H = 30;
+const LINE_H = 44;
+const LINE_TEXT = 19;
+const LINE_BASE = 30;
 const LIST_Y = TOP + 74;
 
 interface Target {
@@ -218,23 +221,10 @@ interface Target {
   act: () => unknown;
 }
 
-function fit(r: Surface, s: string, size: number, w: number): string {
-  const o = { literal: true };
-  if (r.textWidth(s, size, o) <= w) return s;
-  let lo = 0;
-  let hi = s.length;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (r.textWidth(`${s.slice(0, mid)}…`, size, o) <= w) lo = mid;
-    else hi = mid - 1;
-  }
-  return `${s.slice(0, lo)}…`;
-}
-
 function button(r: Surface, t: Theme, x: number, y: number, w: number, h: number, label: string): void {
   r.roundRect(x, y, w, h, h / 2, '#ffffff14');
   r.strokeRoundRect(x, y, w, h, h / 2, 1.5, '#ffffff38');
-  r.text(label, x + w / 2, y + h / 2 + 9, 24, t.text, { align: 'center', font: 'bold', spacing: 1, literal: true });
+  text(r, label, x + w / 2, y + h / 2 + 10, 24, t.text, { align: 'center', font: 'bold', spacing: 1, literal: true });
 }
 
 const toneColor = (tone: Tone, t: Theme) => (tone === 'head' ? C.ice : tone === 'ok' ? t.text : tone === 'warn' ? C.warn : t.dim);
@@ -277,7 +267,7 @@ export function diagnosticsSheet(read: () => (VehicleDiagnostics & { readonly ud
     draw(r, t) {
       r.clear(t.bg);
       const targets: Target[] = [];
-      r.text(DIAG.title, 44, TOP + 40, 30, t.text, { font: 'bold', literal: true });
+      text(r, DIAG.title, 44, TOP + 42, 30, t.text, { font: 'bold', literal: true });
       const bw = 170;
       const by = TOP + 8;
       const bx = PAGE_W - 40 - bw;
@@ -288,18 +278,24 @@ export function diagnosticsSheet(read: () => (VehicleDiagnostics & { readonly ud
       targets.push({ x: rx - 10, y: by - 6, w: bw + 20, h: 58, act: () => (this.refresh(), null) });
       const bottom = BOTTOM + (r.extra || 0);
       const H = bottom - LIST_Y;
-      const total = this.lines.length * LINE_H;
+      const rows = this.lines.map((line) => {
+        const label = wrapText(r, line.label, LINE_TEXT, line.value ? 540 : PAGE_W - 120);
+        const value = line.value ? wrapText(r, line.value, LINE_TEXT, PAGE_W - 80 - 640) : [];
+        return { line, label, value, h: Math.max(label.length, value.length) * LINE_H };
+      });
+      const total = rows.reduce((sum, row) => sum + row.h, 0);
       this.offset = Math.max(0, Math.min(this.offset, Math.max(0, total - H)));
       r.clip(0, LIST_Y, PAGE_W, H);
-      this.lines.forEach((ln, i) => {
-        const y = LIST_Y + i * LINE_H - this.offset;
-        if (y + LINE_H < LIST_Y || y > bottom) return;
-        const base = y + LINE_H - 8;
-        if (ln.tone === 'head') r.fillRect(40, y + 2, PAGE_W - 80, LINE_H - 4, '#ffffff0d');
-        const labelW = ln.value ? 560 : PAGE_W - 120;
-        r.text(fit(r, ln.label, 19, labelW), 52, base, 19, toneColor(ln.tone, t), { literal: true });
-        if (ln.value) r.text(fit(r, ln.value, 19, PAGE_W - 80 - 640), 640, base, 19, ln.tone === 'warn' ? C.warn : t.dim, { literal: true });
-      });
+      let top = LIST_Y - this.offset;
+      for (const row of rows) {
+        const y = top;
+        top += row.h;
+        if (top < LIST_Y || y > bottom) continue;
+        const ln = row.line;
+        if (ln.tone === 'head') r.fillRect(40, y + 2, PAGE_W - 80, row.h - 4, '#ffffff0d');
+        row.label.forEach((line, i) => text(r, line, 52, y + LINE_BASE + i * LINE_H, LINE_TEXT, toneColor(ln.tone, t), { literal: true }));
+        row.value.forEach((line, i) => text(r, line, 640, y + LINE_BASE + i * LINE_H, LINE_TEXT, ln.tone === 'warn' ? C.warn : t.dim, { literal: true }));
+      }
       r.noclip();
       if (total > H) {
         const sbh = Math.max(40, (H * H) / total);

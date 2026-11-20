@@ -21,7 +21,7 @@ import { drawDrivetrain, IMG_H, IMG_W, type Phases } from './drivetrain';
 import { CAMERA_LABEL_H, CAMERA_MAIN, CAMERA_THUMB, DIAL_R, GAP, M, TERRAIN, TOPDOWN_H_SUSPENSION, TOPDOWN_H_SYSTEMS, W, XRAY_H_TERRAIN, XRAY_H_TRACTION, Y0, Y1 } from './layout';
 import { C, withA } from './palette';
 import { DIAG } from './diagnostics';
-import { bar, caps, chip, hline, panel, readout, statusTag, text } from './ui';
+import { bar, caps, chip, hline, panel, readout, statusTag, text, wrapText } from './ui';
 
 export interface PageEnv {
   readonly cv: Surface;
@@ -93,12 +93,13 @@ function dialPanel(env: PageEnv, kind: DialKind, x: number, y: number, w: number
   const size = Math.ceil(BEZEL * DIAL_K * 2 + 4);
   cv.blit(env.layer(`xop-dial-${kind}`, size, size, (c) => drawDialStatic(c, kind, size)), cx - size / 2, cy - size / 2);
   drawDialLive(cv, kind, cx, cy, value);
-  readout(cv, x + 220, y + 44, {
+  readout(cv, x + 220, y + 28, {
     label: kind === 'pitch' ? t.attitude.pitch : t.attitude.roll,
     shown: shownNumber(sig, 1, true),
     unit: deg,
     size: 'lg',
     hint: kind === 'pitch' ? t.attitude.pitchHint : t.attitude.rollHint,
+    statusBelow: true,
   });
   // Автомобиль: тангаж кузова ОТНОСИТЕЛЬНО ОСЕЙ (корректор фар, датчики высоты) — другая величина, отдельной строкой
   if (kind === 'pitch' && state.mode === 'vehicle') {
@@ -156,20 +157,21 @@ function wheelCard(env: PageEnv, w: Wheel, x: number, y: number, cw: number, ch:
   const braking = usableValue(s[`brakeIntervention.${w}`]) === true;
   panel(cv, x, y, cw, ch, braking ? { topLine: C.warn } : {});
   wheelHead(cv, w, x + 16, y + 34);
-  readout(cv, x + 16, y + 58, { label: t.traction.wheelSpeed, shown: shownNumber(s[`wheelSpeed.${w}`], 1), unit: t.units.km_h, size: 'md' });
+  readout(cv, x + 16, y + 58, { label: t.traction.wheelSpeed, shown: shownNumber(s[`wheelSpeed.${w}`], 1), unit: t.units.km_h, size: 'md', statusBelow: true });
   // Автомобиль: отклонение колеса от опорной скорости DSC (оценка; физического проскальзывания источник не даёт)
   const veh = env.state.mode === 'vehicle';
   const delta = env.state.snapshot.extra[`wheelDelta.${w}`];
   const slip = veh ? wheelDeltaMagnitude(env.state.snapshot, w) : usableNumber(s[`wheelSlip.${w}`]);
   readout(cv, x + cw / 2 + 4, y + 58, {
     label: veh ? t.native.extra.wheelDelta : t.traction.slip,
+    statusBelow: true,
     shown: veh ? shownExtra(delta, 0, true) : shownNumber(s[`wheelSlip.${w}`], 0),
     unit: t.units.percent,
     size: 'md',
   });
-  bar(cv, x + cw / 2 + 4, y + 120, cw / 2 - 20, slip, 0, 100, (slip ?? 0) >= 30 ? C.warn : C.ice);
-  hline(cv, x + 16, y + ch - 50, cw - 32);
-  text(cv, t.traction.brakeIntervention, x + 16, y + ch - 30, 14, C.dim);
+  bar(cv, x + cw / 2 + 4, y + 155, cw / 2 - 20, slip, 0, 100, (slip ?? 0) >= 30 ? C.warn : C.ice);
+  hline(cv, x + 16, y + ch - 62, cw - 32);
+  text(cv, t.traction.brakeIntervention, x + 16, y + ch - 38, 14, C.dim);
   const by = y + ch - 10;
   if (brake.ok) {
     if (braking) cv.circle(x + 21, by - 5, 5, C.warn);
@@ -189,18 +191,18 @@ export function tractionPage(env: PageEnv): void {
   const x1 = M;
   const w1 = 340;
   panel(cv, x1, Y0, w1, h, { title: t.traction.split });
-  readout(cv, x1 + 16, Y0 + 48, { label: t.traction.front, shown: shownNumber(s['xdrive.frontPercent'], 0), unit: t.units.percent, size: 'xl' });
-  readout(cv, x1 + w1 - 16, Y0 + 48, { label: t.traction.rear, shown: shownNumber(s['xdrive.rearPercent'], 0), unit: t.units.percent, size: 'xl', align: 'right' });
+  readout(cv, x1 + 16, Y0 + 70, { label: t.traction.front, shown: shownNumber(s['xdrive.frontPercent'], 0), unit: t.units.percent, size: 'xl', statusBelow: true });
+  readout(cv, x1 + w1 - 16, Y0 + 70, { label: t.traction.rear, shown: shownNumber(s['xdrive.rearPercent'], 0), unit: t.units.percent, size: 'xl', align: 'right', statusBelow: true });
   const fv = usableNumber(s['xdrive.frontPercent']);
-  const barY = Y0 + 150;
+  const barY = Y0 + 218;
   cv.fillRect(x1 + 16, barY, w1 - 32, 8, C.track);
   if (fv !== null) {
     const fw = ((w1 - 32) * Math.max(0, Math.min(100, fv))) / 100;
     cv.fillRect(x1 + 16, barY, fw - 2, 8, C.ice);
     cv.fillRect(x1 + 16 + fw + 1, barY, w1 - 32 - fw - 1, 8, C.mBlue);
   }
-  readout(cv, x1 + 16, Y0 + 186, { label: t.traction.frontTorque, shown: shownNumber(s['xdrive.frontTorqueNm'], 0), unit: t.units.nm, size: 'lg' });
-  readout(cv, x1 + 16, Y0 + 268, { label: t.traction.rearTorque, shown: shownNumber(s['xdrive.rearTorqueNm'], 0), unit: t.units.nm, size: 'lg' });
+  readout(cv, x1 + 16, Y0 + 244, { label: t.traction.frontTorque, shown: shownNumber(s['xdrive.frontTorqueNm'], 0), unit: t.units.nm, size: 'lg' });
+  readout(cv, x1 + 16, Y0 + 342, { label: t.traction.rearTorque, shown: shownNumber(s['xdrive.rearTorqueNm'], 0), unit: t.units.nm, size: 'lg' });
   // Передняя доля, выведенная из задней (100 − задняя), — это другая величина, чем измеренная: помечается.
   // Источники полей — в журнале и листе диагностики, не на экране.
   if (presentSource(s['xdrive.rearPercent']) === 'measured' && presentSource(s['xdrive.frontPercent']) === 'estimated') {
@@ -208,11 +210,11 @@ export function tractionPage(env: PageEnv): void {
   }
 
   // Колёса вокруг компактной схемы привода.
-  const cw = 320;
+  const cw = 332;
   const ch = (h - GAP) / 2;
   const xl = x1 + w1 + GAP;
   const cx = xl + cw + GAP;
-  const cWidth = 224;
+  const cWidth = 160;
   const xr = cx + cWidth + GAP;
   wheelCard(env, 'FL', xl, Y0, cw, ch);
   wheelCard(env, 'RL', xl, Y0 + ch + GAP, cw, ch);
@@ -226,7 +228,7 @@ export function tractionPage(env: PageEnv): void {
   const x3 = xr + cw + GAP;
   const w3 = W - M - x3;
   const vehicle = state.mode === 'vehicle';
-  const dh = vehicle ? 142 : 118;
+  const dh = vehicle ? 164 : 156;
   panel(cv, x3, Y0, w3, dh, { title: vehicle ? t.native.extra.lockTitle : t.traction.diff });
   if (state.mode === 'vehicle') {
     // GHAS: момент блокировки по чтению (статус, не доказанный факт) и заданный, Н·м; степени в % источник не даёт
@@ -235,15 +237,15 @@ export function tractionPage(env: PageEnv): void {
     readout(cv, x3 + w3 - 16, Y0 + 38, { label: t.native.extra.lockTarget, shown: shownExtra(ex['rearLock.targetNm'], 1), unit: t.units.nm, size: 'md', align: 'right' });
     const block = shownCode(ex['rearLock.state'], GHAS_STATES);
     const oil = shownExtra(ex['rearLock.oilC'], 0);
-    text(cv, `${t.native.extra.lockBlock} · ${block.text}`, x3 + 16, Y0 + 105, 14, block.ok ? C.text : C.dim);
-    text(cv, `${t.native.extra.lockOil} · ${oil.text}${oil.ok ? ` ${t.units.celsius}` : ''}`, x3 + w3 - 16, Y0 + 105, 14, oil.ok ? C.text : C.dim, { align: 'right' });
+    text(cv, `${t.native.extra.lockBlock} · ${block.text}`, x3 + 16, Y0 + 119, 14, block.ok ? C.text : C.dim);
+    text(cv, `${t.native.extra.lockOil} · ${oil.text}${oil.ok ? ` ${t.units.celsius}` : ''}`, x3 + w3 - 16, Y0 + 119, 14, oil.ok ? C.text : C.dim, { align: 'right' });
     const position = shownExtra(ex['rearLock.positionInc'], 0);
     const speedDelta = shownExtra(ex['rearLock.deltaRpm'], 0);
-    text(cv, `${t.native.extra.lockPosition} · ${position.text}${position.ok ? ` ${t.native.extra.lockIncrement}` : ''}`, x3 + 16, Y0 + 128, 14, position.ok ? C.text : C.dim);
-    text(cv, `${t.native.extra.lockSpeedDelta} · ${speedDelta.text}${speedDelta.ok ? ` ${t.units.rpm}` : ''}`, x3 + w3 - 16, Y0 + 128, 14, speedDelta.ok ? C.text : C.dim, { align: 'right' });
+    text(cv, `${t.native.extra.lockPosition} · ${position.text}${position.ok ? ` ${t.native.extra.lockIncrement}` : ''}`, x3 + 16, Y0 + 147, 14, position.ok ? C.text : C.dim);
+    text(cv, `${t.native.extra.lockSpeedDelta} · ${speedDelta.text}${speedDelta.ok ? ` ${t.units.rpm}` : ''}`, x3 + w3 - 16, Y0 + 147, 14, speedDelta.ok ? C.text : C.dim, { align: 'right' });
   } else {
-    readout(cv, x3 + 16, Y0 + 42, { label: t.traction.diffState, shown: shownSignal(s['rearDiff.lockState'], (v) => t.diffLock[v]), size: 'md' });
-    readout(cv, x3 + w3 - 16, Y0 + 42, { label: t.traction.diffPercent, shown: shownNumber(s['rearDiff.lockPercent'], 0), unit: t.units.percent, size: 'md', align: 'right' });
+    readout(cv, x3 + 16, Y0 + 66, { label: t.traction.diffState, shown: shownSignal(s['rearDiff.lockState'], (v) => t.diffLock[v]), size: 'md' });
+    readout(cv, x3 + w3 - 16, Y0 + 66, { label: t.traction.diffPercent, shown: shownNumber(s['rearDiff.lockPercent'], 0), unit: t.units.percent, size: 'md', align: 'right' });
   }
   const ky = Y0 + dh + GAP;
   panel(cv, x3, ky, w3, h - dh - GAP, { title: t.traction.keyMetrics });
@@ -251,20 +253,22 @@ export function tractionPage(env: PageEnv): void {
   readout(cv, x3 + 16, ky + 42, { label: t.terrain.speed, shown: shownNumber(s.vehicleSpeedKmh, 1), unit: t.units.km_h, size: 'md' });
   const ses = state.session;
   const nowMax = state.mode === 'vehicle' ? null : maxSlipNow(asDomain(state.snapshot));
-  readout(cv, x3 + 16, ky + 112, {
+  readout(cv, x3 + 16, ky + 128, {
     label: state.mode === 'vehicle' ? t.native.extra.maxWheelDelta : t.session.maxSlip,
     shown: extremum(ses.maxSlipOverall, 0),
     unit: ses.maxSlipOverall ? `${t.units.percent} ${t.wheels[ses.maxSlipOverall.wheel].short}` : t.units.percent,
     size: 'md',
-    hint: nowMax ? `${formatNumber(nowMax.value, 0)} ${t.units.percent} ${t.wheels[nowMax.wheel].short} · ${t.traction.now}` : undefined,
+
   });
-  readout(cv, x3 + 16 + half, ky + 112, { label: t.session.maxTorque, shown: extremum(ses.maxEngineTorque, 0), unit: t.units.nm, size: 'md' });
-  const my = ky + (vehicle ? 188 : 202);
-  text(cv, state.mode === 'vehicle' ? t.native.extra.maxWheelDeltaPerWheel : t.session.maxSlipWheel, x3 + 16, my, 14, C.dim);
+  readout(cv, x3 + 16 + half, ky + 42, { label: t.session.maxTorque, shown: extremum(ses.maxEngineTorque, 0), unit: t.units.nm, size: 'md' });
+  const my = ky + 214;
+  const peakLabel = state.mode === 'vehicle' ? t.native.extra.maxWheelDeltaPerWheel : t.session.maxSlipWheel;
+  wrapText(cv, peakLabel, 14, half - 12).forEach((line, i) => text(cv, line, x3 + 16, my + i * 20, 14, C.dim));
+  if (nowMax) text(cv, `${t.traction.now} ${formatNumber(nowMax.value, 0)} ${t.units.percent} ${t.wheels[nowMax.wheel].short}`, x3 + 16 + half, ky + 202, 13, C.dim);
   WHEELS.forEach((w, i) => {
     const d = extremum(ses.maxSlip[w], 0);
-    const px = x3 + 16 + (i % 2) * half;
-    const py = my + 26 + Math.floor(i / 2) * 24;
+    const px = x3 + 16 + (i % 2) * (half / 2);
+    const py = my + 44 + Math.floor(i / 2) * 26;
     const lw = text(cv, t.wheels[w].short, px, py, 16, C.ice);
     text(cv, d.ok ? `${d.text} ${t.units.percent}` : d.text, px + lw + 8, py, 16, C.text);
   });
@@ -274,9 +278,9 @@ export function tractionPage(env: PageEnv): void {
   const ib = ex['brakePressure.tmc'].quality !== 'unavailable' || ex['brakePressure.system'].quality !== 'unavailable';
   const c1 = shownExtra(ex[ib ? 'brakePressure.tmc' : 'brakePressure.circuit1'], 1);
   const c2 = shownExtra(ex[ib ? 'brakePressure.system' : 'brakePressure.circuit2'], 1);
-  const pressureY = my + (vehicle ? 74 : 84);
-  readout(cv, x3 + 16, pressureY, { label: ib ? t.native.extra.brakeTmc : t.native.extra.brakeCircuit1, shown: c1, unit: t.units.bar, size: 'sm' });
-  readout(cv, x3 + 16 + half, pressureY, { label: ib ? t.native.extra.brakeSystem : t.native.extra.brakeCircuit2, shown: c2, unit: t.units.bar, size: 'sm' });
+  const pressureY = ky + 128;
+  readout(cv, x3 + 16 + half, pressureY, { label: ib ? t.native.extra.brakeTmc : t.native.extra.brakeCircuit1, shown: c1, unit: t.units.bar, size: 'sm' });
+  readout(cv, x3 + 16 + half, ky + 208, { label: ib ? t.native.extra.brakeSystem : t.native.extra.brakeCircuit2, shown: c2, unit: t.units.bar, size: 'sm' });
 }
 
 /* ============================== Подвеска ============================== */
@@ -353,7 +357,7 @@ function topdown(env: PageEnv, key: 'topdownLarge' | 'topdownSmall', cx: number,
       const p = WHEEL_POS[wh];
       const [lx, ly] = P({ x: left ? p.x - TYRE_W / 2 - 16 : p.x + TYRE_W / 2 + 16, y: p.y });
       text(cv, t.wheels[wh].short, lx, ly - 2, 15, C.text, { align: left ? 'right' : 'left' });
-      text(cv, t.wheels[wh].code, lx, ly + 12, 11, C.dim, { align: left ? 'right' : 'left' });
+      text(cv, t.wheels[wh].code, lx, ly + 18, 11, C.dim, { align: left ? 'right' : 'left' });
     }
   }
 }
@@ -421,7 +425,7 @@ function tempRow(cv: Surface, x: number, y: number, w: number, label: string, si
   readout(cv, x, y, { label, shown: shownNumber(sig, 0), unit: t.units.celsius, size: 'md' });
   const m = extremum(max, 0);
   text(cv, `${t.systems.sessionMax} ${m.text}${m.ok ? ` ${t.units.celsius}` : ''}`, x + w, y + 46, 14, C.dim, { align: 'right' });
-  bar(cv, x, y + 62, w, v, 40, 140, v !== null && v >= 115 ? C.warn : C.ice);
+  bar(cv, x, y + 72, w, v, 40, 140, v !== null && v >= 115 ? C.warn : C.ice);
 }
 
 export function systemsPage(env: PageEnv): void {
@@ -430,10 +434,10 @@ export function systemsPage(env: PageEnv): void {
   const ses = state.session;
   const h = Y1 - Y0;
   // Силовой агрегат.
-  const w1 = 380;
+  const w1 = 500;
   panel(cv, M, Y0, w1, h, { title: t.systems.powertrain });
   readout(cv, M + 16, Y0 + 44, { label: t.systems.gear, shown: shownSignal(s.gear, gearText), size: 'xl' });
-  readout(cv, M + 180, Y0 + 44, {
+  readout(cv, M + 220, Y0 + 44, {
     label: t.systems.engineTorque,
     shown: shownNumber(s['engine.torqueNm'], 0),
     unit: t.units.nm,
@@ -442,13 +446,13 @@ export function systemsPage(env: PageEnv): void {
   });
   readout(cv, M + 16, Y0 + 158, { label: t.systems.rpm, shown: shownNumber(s['engine.rpm'], 0), unit: t.units.rpm, size: 'md' });
   readout(cv, M + 16, Y0 + 238, { label: t.systems.pedal, shown: shownNumber(s.acceleratorPedalPercent, 0), unit: t.units.percent, size: 'md' });
-  bar(cv, M + 16, Y0 + 300, w1 - 32, usableNumber(s.acceleratorPedalPercent), 0, 100);
-  readout(cv, M + 16, Y0 + 318, { label: t.systems.throttle, shown: shownNumber(s['engine.throttlePercent'], 0), unit: t.units.percent, size: 'md' });
-  bar(cv, M + 16, Y0 + 380, w1 - 32, usableNumber(s['engine.throttlePercent']), 0, 100, '#b9c4d4');
+  bar(cv, M + 16, Y0 + 316, w1 - 32, usableNumber(s.acceleratorPedalPercent), 0, 100);
+  readout(cv, M + 16, Y0 + 338, { label: t.systems.throttle, shown: shownNumber(s['engine.throttlePercent'], 0), unit: t.units.percent, size: 'md' });
+  bar(cv, M + 16, Y0 + 418, w1 - 32, usableNumber(s['engine.throttlePercent']), 0, 100, '#b9c4d4');
 
   // Ассистенты и температуры.
   const x2 = M + w1 + GAP;
-  const w2 = 380;
+  const w2 = 500;
   const ah = 150;
   panel(cv, x2, Y0, w2, ah, { title: t.systems.assists });
   const hdcActive = usableValue(s['hdc.status']) === 'active';
@@ -478,12 +482,12 @@ export function systemsPage(env: PageEnv): void {
   const ty = Y0 + ah + GAP;
   panel(cv, x2, ty, w2, h - ah - GAP, { title: t.systems.temps });
   tempRow(cv, x2 + 16, ty + 38, w2 - 32, t.systems.gearbox, s['temperature.gearboxC'], ses.maxGearboxTemp);
-  tempRow(cv, x2 + 16, ty + 112, w2 - 32, t.systems.coolant, s['temperature.coolantC'], ses.maxCoolantTemp);
-  tempRow(cv, x2 + 16, ty + 186, w2 - 32, t.systems.oil, s['temperature.engineOilC'], ses.maxOilTemp);
+  tempRow(cv, x2 + 16, ty + 122, w2 - 32, t.systems.coolant, s['temperature.coolantC'], ses.maxCoolantTemp);
+  tempRow(cv, x2 + 16, ty + 206, w2 - 32, t.systems.oil, s['temperature.engineOilC'], ses.maxOilTemp);
 
   // Шины.
   const x3 = x2 + w2 + GAP;
-  const w3 = 404;
+  const w3 = W - M - x3;
   panel(cv, x3, Y0, w3, h, { title: t.systems.tyres });
   const known = {} as Record<Wheel, boolean>;
   for (const w of WHEELS) known[w] = usableNumber(s[`tyrePressure.${w}`]) !== null;
@@ -505,30 +509,8 @@ export function systemsPage(env: PageEnv): void {
   tyre('RL', x3 + 16, Y0 + 290, false);
   tyre('RR', x3 + w3 - 16, Y0 + 290, true);
 
-  // Динамика.
-  const x4 = x3 + w3 + GAP;
-  const w4 = W - M - x4;
-  panel(cv, x4, Y0, w4, h, { title: t.systems.dynamics });
-  const gcx = x4 + w4 / 2;
-  const gcy = Y0 + 128;
-  const gr = 72;
-  const LIMIT = 0.5;
-  cv.arc(gcx, gcy, gr - 0.6, gr + 0.6, 0, 360, withA('#bed7f0', 0.35));
-  for (let a = 0; a < 360; a += 12) cv.arc(gcx, gcy, gr / 2 - 0.6, gr / 2 + 0.6, a, a + 6, withA('#bed7f0', 0.3));
-  cv.line(gcx - gr - 8, gcy, gcx + gr + 8, gcy, 1, C.hair);
-  cv.line(gcx, gcy - gr - 8, gcx, gcy + gr + 8, 1, C.hair);
-  text(cv, `${formatNumber(LIMIT, 1, true)} ${t.units.g}`, gcx, gcy - gr - 6, 12, C.dim, { align: 'center' });
-  const lg = usableNumber(s['acceleration.longG']);
-  const la = usableNumber(s['acceleration.latG']);
-  if (lg !== null && la !== null) {
-    const k = gr / LIMIT;
-    cv.circle(gcx + Math.max(-LIMIT, Math.min(LIMIT, la)) * k, gcy - Math.max(-LIMIT, Math.min(LIMIT, lg)) * k, 7, C.ice);
-  }
-  readout(cv, x4 + 16, Y0 + 222, { label: t.systems.longG, shown: shownNumber(s['acceleration.longG'], 2, true), unit: t.units.g, size: 'md' });
-  readout(cv, x4 + 16, Y0 + 288, { label: t.systems.latG, shown: shownNumber(s['acceleration.latG'], 2, true), unit: t.units.g, size: 'md' });
-  readout(cv, x4 + 16, Y0 + 354, { label: t.systems.yaw, shown: shownNumber(s.yawRateDegS, 1, true), unit: t.units.deg_s, size: 'md' });
-  // Только доступ разработчика: лист снимка чтения (в обычном запуске кнопки нет)
-  if (env.button && env.openDiagnostics) env.button(x4 + 16, Y1 - 40, w4 - 32, 30, DIAG.open, env.openDiagnostics, 'dev-diagnostics');
+  // Только доступ разработчика: лист снимка чтения (в обычном запуске кнопки нет).
+  if (env.button && env.openDiagnostics) env.button(M + 252, Y0 + 174, w1 - 268, 40, DIAG.open, env.openDiagnostics, 'dev-diagnostics');
 }
 
 /* ============================== Камеры ============================== */
