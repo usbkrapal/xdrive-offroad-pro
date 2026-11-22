@@ -18,7 +18,7 @@ import type { Layer, Surface } from '../platform/kitTypes';
 import { T } from '../strings';
 import { BEZEL, drawDialLive, drawDialStatic, FACE, vehicleRotation, type DialKind, type DialTexture } from './dial';
 import { drawDrivetrain, IMG_H, IMG_W, type Phases } from './drivetrain';
-import { CAMERA_LABEL_H, CAMERA_MAIN, CAMERA_THUMB, DIAL_R, GAP, M, TERRAIN, TOPDOWN_H_SUSPENSION, TOPDOWN_H_SYSTEMS, W, XRAY_H_TERRAIN, XRAY_H_TRACTION, Y0, Y1 } from './layout';
+import { DIAL_R, GAP, M, TERRAIN, TOPDOWN_H_SUSPENSION, TOPDOWN_H_SYSTEMS, W, XRAY_H_TERRAIN, XRAY_H_TRACTION, Y0, Y1 } from './layout';
 import { C, withA } from './palette';
 import { DIAG } from './diagnostics';
 import { bar, caps, chip, hline, panel, readout, statusTag, text, wrapText } from './ui';
@@ -32,6 +32,10 @@ export interface PageEnv {
   /** G.layer: статичная часть рисуется один раз и кэшируется (на GPU — текстурой). */
   readonly layer: (key: string, w: number, h: number, draw: (c: Surface) => void) => Layer;
   readonly nowMs: number;
+  readonly selectedCamera?: CameraId;
+  readonly cameraExpanded?: boolean;
+  readonly selectCamera?: (id: CameraId) => unknown;
+  readonly toggleCamera?: () => unknown;
   /** Кнопка на странице (только когда kit сам ведёт экран); иначе null. */
   readonly button: ((x: number, y: number, w: number, h: number, label: string, run: () => unknown, key: string, primary?: boolean) => number) | null;
   /** Новая сессия (кнопка «Сброс» в панели сессии «Рельефа»). */
@@ -98,7 +102,7 @@ function dialPanel(env: PageEnv, kind: DialKind, x: number, y: number, w: number
     shown: shownNumber(sig, 1, true),
     unit: deg,
     size: 'lg',
-    hint: kind === 'pitch' ? t.attitude.pitchHint : t.attitude.rollHint,
+    hint: kind === 'pitch' && state.mode === 'vehicle' && state.snapshot.extra.pitchVsAxlesDeg.quality !== 'unavailable' ? undefined : kind === 'pitch' ? t.attitude.pitchHint : t.attitude.rollHint,
     statusBelow: true,
   });
   // Автомобиль: тангаж кузова ОТНОСИТЕЛЬНО ОСЕЙ (корректор фар, датчики высоты) — другая величина, отдельной строкой
@@ -233,8 +237,8 @@ export function tractionPage(env: PageEnv): void {
   if (state.mode === 'vehicle') {
     // GHAS: момент блокировки по чтению (статус, не доказанный факт) и заданный, Н·м; степени в % источник не даёт
     const ex = state.snapshot.extra;
-    readout(cv, x3 + 16, Y0 + 38, { label: t.native.extra.lockTorque, shown: shownExtra(ex['rearLock.torqueNm'], 1), unit: t.units.nm, size: 'md' });
-    readout(cv, x3 + w3 - 16, Y0 + 38, { label: t.native.extra.lockTarget, shown: shownExtra(ex['rearLock.targetNm'], 1), unit: t.units.nm, size: 'md', align: 'right' });
+    readout(cv, x3 + 16, Y0 + 38, { label: 'Блокировка', shown: shownExtra(ex['rearLock.torqueNm'], 1), unit: t.units.nm, size: 'md' });
+    readout(cv, x3 + w3 - 16, Y0 + 38, { label: 'Задано', shown: shownExtra(ex['rearLock.targetNm'], 1), unit: t.units.nm, size: 'md', align: 'right' });
     const block = shownCode(ex['rearLock.state'], GHAS_STATES);
     const oil = shownExtra(ex['rearLock.oilC'], 0);
     text(cv, `${t.native.extra.lockBlock} · ${block.text}`, x3 + 16, Y0 + 119, 14, block.ok ? C.text : C.dim);
@@ -242,7 +246,7 @@ export function tractionPage(env: PageEnv): void {
     const position = shownExtra(ex['rearLock.positionInc'], 0);
     const speedDelta = shownExtra(ex['rearLock.deltaRpm'], 0);
     text(cv, `${t.native.extra.lockPosition} · ${position.text}${position.ok ? ` ${t.native.extra.lockIncrement}` : ''}`, x3 + 16, Y0 + 147, 14, position.ok ? C.text : C.dim);
-    text(cv, `${t.native.extra.lockSpeedDelta} · ${speedDelta.text}${speedDelta.ok ? ` ${t.units.rpm}` : ''}`, x3 + w3 - 16, Y0 + 147, 14, speedDelta.ok ? C.text : C.dim, { align: 'right' });
+    text(cv, `Разность · ${speedDelta.text}${speedDelta.ok ? ` ${t.units.rpm}` : ''}`, x3 + w3 - 16, Y0 + 147, 14, speedDelta.ok ? C.text : C.dim, { align: 'right' });
   } else {
     readout(cv, x3 + 16, Y0 + 66, { label: t.traction.diffState, shown: shownSignal(s['rearDiff.lockState'], (v) => t.diffLock[v]), size: 'md' });
     readout(cv, x3 + w3 - 16, Y0 + 66, { label: t.traction.diffPercent, shown: shownNumber(s['rearDiff.lockPercent'], 0), unit: t.units.percent, size: 'md', align: 'right' });
@@ -412,9 +416,9 @@ export function suspensionPage(env: PageEnv): void {
     [t.session.maxHeightRange, extremum(state.session.maxHeightRange, 0)],
   ];
   rows.forEach(([label, shown], i) => {
-    const ry = Y0 + 40 + i * 62;
+    const ry = Y0 + 40 + i * 68;
     readout(cv, x3 + 16, ry, { label, shown, unit: t.units.mm, size: 'sm' });
-    if (i < rows.length - 1) hline(cv, x3 + 16, ry + 58, w3 - 32);
+    if (i < rows.length - 1) hline(cv, x3 + 16, ry + 65, w3 - 32);
   });
 }
 
@@ -422,10 +426,11 @@ export function suspensionPage(env: PageEnv): void {
 
 function tempRow(cv: Surface, x: number, y: number, w: number, label: string, sig: Signal<number>, max: Extremum | null): void {
   const v = usableNumber(sig);
-  readout(cv, x, y, { label, shown: shownNumber(sig, 0), unit: t.units.celsius, size: 'md' });
+  text(cv, label, x, y + 22, 15, C.dim);
+  readout(cv, x + w, y - 20, { label: '', shown: shownNumber(sig, 0), unit: t.units.celsius, size: 'md', align: 'right' });
   const m = extremum(max, 0);
-  text(cv, `${t.systems.sessionMax} ${m.text}${m.ok ? ` ${t.units.celsius}` : ''}`, x + w, y + 46, 14, C.dim, { align: 'right' });
-  bar(cv, x, y + 72, w, v, 40, 140, v !== null && v >= 115 ? C.warn : C.ice);
+  text(cv, `${t.systems.sessionMax} ${m.text}${m.ok ? ` ${t.units.celsius}` : ''}`, x + w, y + 66, 14, C.dim, { align: 'right' });
+  bar(cv, x, y + 70, w, v, 40, 140, v !== null && v >= 115 ? C.warn : C.ice);
 }
 
 export function systemsPage(env: PageEnv): void {
@@ -453,7 +458,7 @@ export function systemsPage(env: PageEnv): void {
   // Ассистенты и температуры.
   const x2 = M + w1 + GAP;
   const w2 = 500;
-  const ah = 150;
+  const ah = 184;
   panel(cv, x2, Y0, w2, ah, { title: t.systems.assists });
   const hdcActive = usableValue(s['hdc.status']) === 'active';
   const onOff = (v: boolean) => (v ? t.onOff.on : t.onOff.off);
@@ -471,19 +476,19 @@ export function systemsPage(env: PageEnv): void {
           : { text: '—', quality: fdr === null ? shownExtra(ex['dsc.fdr'], 0).quality : 'invalid', ok: false };
     readout(cv, x2 + 16, Y0 + 40, { label: xt.hdcAvailable, shown: shownCode(ex['hdc.available'], xt.hdc), size: 'sm' });
     readout(cv, x2 + w2 / 2, Y0 + 40, { label: xt.driveMode, shown: shownCode(ex.driveMode, FES_MODES), size: 'sm' });
-    readout(cv, x2 + 16, Y0 + 92, { label: xt.dscFdr, shown: shownCode(ex['dsc.fdr'], xt.fdr), size: 'sm' });
-    readout(cv, x2 + w2 / 2, Y0 + 92, { label: xt.dtcDerived, shown: dtc, size: 'sm' });
+    readout(cv, x2 + 16, Y0 + 110, { label: xt.dscFdr, shown: shownCode(ex['dsc.fdr'], xt.fdr), size: 'sm' });
+    readout(cv, x2 + w2 / 2, Y0 + 110, { label: xt.dtcDerived, shown: dtc, size: 'sm' });
   } else {
     readout(cv, x2 + 16, Y0 + 40, { label: t.systems.hdc, shown: shownSignal(s['hdc.status'], (v) => t.hdc[v]), size: 'sm', valueColor: hdcActive ? C.cold : undefined });
     readout(cv, x2 + w2 / 2, Y0 + 40, { label: t.systems.hdcSet, shown: shownNumber(s['hdc.setSpeedKmh'], 0), unit: t.units.km_h, size: 'sm' });
-    readout(cv, x2 + 16, Y0 + 92, { label: t.systems.dsc, shown: shownSignal(s['dsc.status'], onOff), size: 'sm' });
-    readout(cv, x2 + w2 / 2, Y0 + 92, { label: t.systems.dtc, shown: shownSignal(s['dtc.status'], onOff), size: 'sm' });
+    readout(cv, x2 + 16, Y0 + 110, { label: t.systems.dsc, shown: shownSignal(s['dsc.status'], onOff), size: 'sm' });
+    readout(cv, x2 + w2 / 2, Y0 + 110, { label: t.systems.dtc, shown: shownSignal(s['dtc.status'], onOff), size: 'sm' });
   }
   const ty = Y0 + ah + GAP;
   panel(cv, x2, ty, w2, h - ah - GAP, { title: t.systems.temps });
-  tempRow(cv, x2 + 16, ty + 38, w2 - 32, t.systems.gearbox, s['temperature.gearboxC'], ses.maxGearboxTemp);
-  tempRow(cv, x2 + 16, ty + 122, w2 - 32, t.systems.coolant, s['temperature.coolantC'], ses.maxCoolantTemp);
-  tempRow(cv, x2 + 16, ty + 206, w2 - 32, t.systems.oil, s['temperature.engineOilC'], ses.maxOilTemp);
+  tempRow(cv, x2 + 16, ty + 34, w2 - 32, t.systems.gearbox, s['temperature.gearboxC'], ses.maxGearboxTemp);
+  tempRow(cv, x2 + 16, ty + 110, w2 - 32, t.systems.coolant, s['temperature.coolantC'], ses.maxCoolantTemp);
+  tempRow(cv, x2 + 16, ty + 186, w2 - 32, t.systems.oil, s['temperature.engineOilC'], ses.maxOilTemp);
 
   // Шины.
   const x3 = x2 + w2 + GAP;
@@ -502,7 +507,7 @@ export function systemsPage(env: PageEnv): void {
     if (!right) text(cv, t.wheels[w].code, hx + sw + 6, y, 12, C.dim);
     else text(cv, t.wheels[w].code, hx - sw - 6, y, 12, C.dim, { align: 'right' });
     readout(cv, x, y + 8, { label: t.systems.pressure, shown: shownNumber(s[`tyrePressure.${w}`], 1), unit: t.units.bar, size: 'sm', align: al });
-    readout(cv, x, y + 66, { label: t.systems.tyreTemp, shown: shownNumber(s[`tyreTemperature.${w}`], 0), unit: t.units.celsius, size: 'sm', align: al });
+    readout(cv, x, y + 84, { label: t.systems.tyreTemp, shown: shownNumber(s[`tyreTemperature.${w}`], 0), unit: t.units.celsius, size: 'sm', align: al });
   };
   tyre('FL', x3 + 16, Y0 + 70, false);
   tyre('FR', x3 + w3 - 16, Y0 + 70, true);
@@ -550,25 +555,41 @@ function cameraFrame(env: PageEnv, id: CameraId, x: number, y: number, w: number
     cameraPlaceholder(cv, x, y, w, h, t.cameras.loadError, C.red);
     return;
   }
-  cv.image(img.id, x, y, w, h);
+  const scale = Math.min(w / img.w, h / img.h);
+  const iw = img.w * scale, ih = img.h * scale;
+  cv.fillRect(x, y, w, h, '#000000');
+  cv.image(img.id, x + (w - iw) / 2, y + (h - ih) / 2, iw, ih);
 }
 
 export function camerasPage(env: PageEnv): void {
   const { cv, state } = env;
+  const selected = env.selectedCamera ?? 'front';
+  const expanded = !!env.cameraExpanded;
   const demo = state.mode === 'demo';
-  let x = M;
-  for (const id of CAM_ROW) {
-    const large = id === 'front';
-    const f = large ? CAMERA_MAIN : CAMERA_THUMB;
-    const pw = f.w + 32;
-    panel(cv, x, Y0, pw, Y1 - Y0);
-    // все кадры по одной середине — середине переднего
-    const fy = Y0 + CAMERA_LABEL_H + (CAMERA_MAIN.h - f.h) / 2;
-    const nw = text(cv, t.native.cameras.names[id], x + 16, fy - 10, large ? 18 : 16, C.text);
-    if (demo) text(cv, t.native.cameras.demo, x + 16 + nw + 10, fy - 10, 13, C.warn);
-    cameraFrame(env, id, x + 16, fy, f.w, f.h, large);
-    x += pw + GAP;
+  const fullW = W - 2 * M;
+  const top = expanded ? 38 : Y0;
+  const h = Y1 + (cv.extra ?? 0) - top;
+  const draw = (id: CameraId, x: number, y: number, w: number, ph: number, primary: boolean) => {
+    const pad = 8, labelH = primary ? 36 : 32;
+    cv.fillRect(x, y, w, ph, C.panel);
+    text(cv, t.native.cameras.names[id], x + pad, y + 25, primary ? 19 : 17, C.text);
+    if (demo) text(cv, t.native.cameras.demo, x + w - pad, y + 25, 13, C.warn, { align: 'right' });
+    else if (primary) text(cv, expanded ? 'Вернуть три камеры' : 'Нажмите для увеличения', x + w - pad, y + 25, 15, C.dim, { align: 'right' });
+    cameraFrame(env, id, x + pad, y + labelH, w - pad * 2, ph - labelH - pad, primary);
+    if (cv.own) {
+      cv.target(x, y, w, ph, () => primary ? env.toggleCamera?.() : env.selectCamera?.(id), `camera:${id}`, 3);
+    }
+  };
+  if (expanded) {
+    draw(selected, M, top, fullW, h, true);
+    return;
   }
+  const mainW = Math.floor((fullW - GAP) * 0.64);
+  draw(selected, M, top, mainW, h, true);
+  const sideX = M + mainW + GAP;
+  const sideW = fullW - mainW - GAP;
+  const sideH = (h - GAP) / 2;
+  CAM_ROW.filter((id) => id !== selected).forEach((id, i) => draw(id, sideX, top + i * (sideH + GAP), sideW, sideH, false));
 }
 
 export type PageFn = (env: PageEnv) => void;

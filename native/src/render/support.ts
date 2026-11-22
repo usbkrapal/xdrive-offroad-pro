@@ -36,7 +36,7 @@ const clip = (s: string, n = 96) => (s.length > n ? `${s.slice(0, n - 1)}…` : 
 
 /** UDS кратко: блок, состояние, F150; записи — счётчики, период/промежуток, последнее сырьё. */
 export function udsSupportLines(d: ModelDiagnostics | null): DiagLine[] {
-  const out: DiagLine[] = [{ label: 'UDS (только чтение 0x22)', value: '', tone: 'head' }];
+  const out: DiagLine[] = [{ label: 'Диагностика (чтение UDS / OBD)', value: '', tone: 'head' }];
   const u = d ? d.uds : null;
   if (!u) return [...out, { label: 'нет', value: 'демо или транспорта TASU нет', tone: 'warn' }];
   const s = u.stats;

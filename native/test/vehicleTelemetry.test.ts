@@ -132,9 +132,8 @@ describe('allowlist: манифест, флаги, периоды опроса',
       // быстрые — 5 Гц (не чаще: одно чтение на поле в полёте, таймаут привязки 3 с); температуры/TPMS — реже
       else assert.ok(f.pollMs && f.pollMs >= 200, `${f.field}: период опроса`);
     }
-    const slow = ['statusEngineTemperature', 'statusTyrePressure', 'statusTyreTemperature', 'statusNewCurrentUnitsStatusExt'];
     for (const f of VEHICLE_FIELDS.filter((x) => x.flags === 'rs')) {
-      assert.equal(f.pollMs, slow.includes(f.field) ? (f.field === 'statusEngineTemperature' ? 5000 : 10000) : 200, f.field);
+      assert.equal(f.pollMs, f.field.startsWith('statusTyre') || f.field === 'statusNewCurrentUnitsStatusExt' ? 10000 : 200, f.field);
     }
     assert.equal(VEHICLE_INTERFACES.length, 13);
     assert.equal(VEHICLE_FIELDS.length, 19);
@@ -166,7 +165,7 @@ describe('allowlist: манифест, флаги, периоды опроса',
   it('watch получает opts: fieldPollMs по полям (200 мс = 5 Гц / 5 с / 10 с), onAvailability у всех', async () => {
     const { tr } = await started();
     const by = (i: string) => tr.subs.find((s) => s.iface === i)!.opts!;
-    assert.deepEqual(by(CDS).fieldPollMs, { statusEngineSpeed2: 200, statusEngineTemperature: 5000 });
+    assert.deepEqual(by(CDS).fieldPollMs, { statusEngineSpeed2: 200, statusEngineTemperature: 200 });
     assert.equal(by(CDS).pollMs, 200);
     assert.deepEqual(by(V2).fieldPollMs, { statusCarSpeed2: 200 });
     assert.deepEqual(by(FES).fieldPollMs, { statusActualValueTorque2: 200 });

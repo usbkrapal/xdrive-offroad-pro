@@ -1,6 +1,7 @@
 // Узкий транспорт диагностического ЧТЕНИЯ через TASU головного устройства (InternalTasu, как BMW ts_diagnostic_service).
 // Формат кадра и вердиктов — по MIT idrive7-apps kit/runtime/diag.js (082d42d), переписано, без импорта его Diag:
 // наружу отдаётся только read(ecu, did) — служба 0x22 ReadDataByIdentifier и только для пар из READ_ALLOWLIST.
+// Единственное дополнение — фиксированный OBD 01/11 к DME 0x12 (дроссель).
 // Никаких других служб (0x10/0x11/0x14/0x19/0x27/0x2E/0x2F/0x31…), функциональных (0xDF) запросов, перебора
 // идентификаторов, сессий и доступа безопасности: такого запроса этот модуль собрать не может.
 //
@@ -21,6 +22,7 @@ const SID_READ = 0x22;
 
 /** Блоки и идентификаторы, которые разрешено читать (0x22). F150 — идентификация (SGBD-индекс). */
 export const READ_ALLOWLIST: Readonly<Record<number, readonly number[]>> = {
+  0x12: [0xf411], // standard throttle PID 11 through the documented F4xx mapping
   0x01: [0xf150, 0x4101], // ACSM: идентификация, IMU — только сырьё (раскладка не установлена)
   0x0f: [0xf150, 0x4013, 0xdc4c, 0x4005, 0x4012, 0x4007, 0x401b, 0xdc47, 0x400f, 0x4014, 0x4015, 0x4016], // GHAS/GSD: состояние, момент блокировки, заданный, положение, Δn, масло, флаги
   0x18: [0xf150, 0x6000, 0xda12], // EGS: идентификация, температура масла АКПП (GSZFBCE 6000 / GSZFB1 DA12)
@@ -103,6 +105,7 @@ export function parseEvent(v: unknown): FrameEvent {
 interface Pending {
   readonly ecu: number;
   readonly did: number;
+  readonly sid: number;
   readonly done: (r: ReadResult) => void;
   /** Транспорт принял запрос — с этого момента считается ожидание ответа. */
   sent: boolean;
@@ -126,6 +129,7 @@ export class ReadOnlyTasu {
   private chain: Promise<unknown> = Promise.resolve();
   private pending: Pending | null = null;
   private initError: string | null = null;
+  private throttleRoute: 'uds' | 'obd' | null = null;
   readonly stats: TasuStats = { requests: 0, ok: 0, nrc: 0, timeouts: 0, refused: 0, busyRetries: 0, lastError: null };
 
   constructor(
@@ -142,6 +146,7 @@ export class ReadOnlyTasu {
       await this.signals.on(p, TASU_EVENT, (v) => this.onEvent(v));
       await this.signals.onAvailable(p, (a) => {
         this.avail = !!a;
+        if (!a) this.throttleRoute = null;
         // провайдер пропал: ответа на текущий запрос не будет
         if (!a && this.pending) this.finish({ kind: 'refused', detail: 'TASU unavailable' });
       });
@@ -154,6 +159,9 @@ export class ReadOnlyTasu {
   get available(): boolean {
     return !this.closed && !!this.p && this.avail;
   }
+  get throttleSource(): string {
+    return this.throttleRoute === 'uds' ? 'UDS DME F411' : this.throttleRoute === 'obd' ? 'OBD DME 01/11' : 'DME F411 / OBD 01/11';
+  }
   get error(): string | null {
     return this.initError;
   }
@@ -165,6 +173,23 @@ export class ReadOnlyTasu {
     const r = this.chain.then(run, run);
     this.chain = r.catch(() => undefined);
     return r;
+  }
+
+  /** Единственный дополнительный стандартный запрос: DME 0x12, service 01, PID 11 (дроссель).
+   * Никаких произвольных SID/PID и записи. Та же последовательная очередь и тайм-ауты, что у UDS. */
+  readThrottle(): Promise<ReadResult> {
+    const run = async () => {
+      if (this.throttleRoute !== 'obd') {
+        const uds = await this.readNow(0x12, 0xf411);
+        if (uds.kind === 'ok') { this.throttleRoute = 'uds'; return uds; }
+        if (uds.kind !== 'nrc' || [0x11, 0x12, 0x31].indexOf(uds.nrc) < 0) return uds;
+        this.throttleRoute = 'obd';
+      }
+      return this.readNow(0x12, 0x11, 0x01);
+    };
+    const result = this.chain.then(run, run);
+    this.chain = result.catch(() => undefined);
+    return result;
   }
 
   close(): void {
@@ -190,18 +215,20 @@ export class ReadOnlyTasu {
     if (e.kind !== 'frame' || e.frame.ecu !== p.ecu) return;
     const u = e.frame.uds;
     // ответы на чужие запросы (другие приложения говорят с тем же блоком) не наши
-    if (u[0] === 0x7f && u[1] === SID_READ) {
+    if (u[0] === 0x7f && u[1] === p.sid) {
       if (u[2] === 0x78) {
         this.pendingSeen = true;
         return;
       }
       return this.finish({ kind: 'nrc', nrc: u[2] });
     }
-    if (u[0] === SID_READ + 0x40 && u[1] === p.did >> 8 && u[2] === (p.did & 0xff)) this.finish({ kind: 'ok', payload: u.slice(3) });
+    if (p.sid === 0x01) {
+      if (u[0] === 0x41 && u[1] === 0x11) this.finish({ kind: 'ok', payload: u.slice(2) });
+    } else if (u[0] === SID_READ + 0x40 && u[1] === p.did >> 8 && u[2] === (p.did & 0xff)) this.finish({ kind: 'ok', payload: u.slice(3) });
   }
   private pendingSeen = false;
 
-  private async readNow(ecu: number, did: number): Promise<ReadResult> {
+  private async readNow(ecu: number, did: number, sid = SID_READ): Promise<ReadResult> {
     if (this.closed) return { kind: 'closed' };
     if (!this.p) return { kind: 'refused', detail: this.initError || 'no TASU proxy' };
     if (!this.avail) return { kind: 'refused', detail: 'TASU unavailable' };
@@ -209,11 +236,11 @@ export class ReadOnlyTasu {
     this.pendingSeen = false;
     const t = this.timing;
     const result = new Promise<ReadResult>((resolve) => {
-      this.pending = { ecu, did, done: resolve, sent: false };
+      this.pending = { ecu, did, sid, done: resolve, sent: false };
     });
     let hard: ReturnType<typeof setTimeout> | null = setTimeout(() => this.finish({ kind: 'timeout' }), t.hardTimeoutMs);
     let reply: ReturnType<typeof setTimeout> | null = null;
-    const params = { sourceAddress: TESTER, targetAddress: ecu, serviceID: SID_READ, subroutineID: 0, udsDataLength: 2, udsData: Buffer.from([did >> 8, did & 0xff]), deadlockTime: 0 };
+    const params = { sourceAddress: TESTER, targetAddress: ecu, serviceID: sid, subroutineID: 0, udsDataLength: sid === 0x01 ? 1 : 2, udsData: Buffer.from(sid === 0x01 ? [0x11] : [did >> 8, did & 0xff]), deadlockTime: 0 };
     try {
       for (let attempt = 0; this.pending; attempt++) {
         const verdict = verdictOf(await this.signals.call(this.p, TASU_METHOD, params, t.callTimeoutMs));

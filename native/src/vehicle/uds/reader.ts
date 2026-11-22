@@ -10,6 +10,8 @@ import { decodeExact, hexBytes, identityHex, IDENT_DID, type DecodedRecord } fro
 export interface ReadPort {
   readonly available: boolean;
   read(ecu: number, did: number): Promise<ReadResult>;
+  readThrottle?(): Promise<ReadResult>;
+  readonly throttleSource?: string;
   close(): void;
 }
 
@@ -35,7 +37,8 @@ export interface UdsLog {
 /** Предел строки журнала. Сырые байты — не больше 32 (hexBytes). */
 const LOG_MAX = 240;
 
-export const GAP_MS = 150;
+export const GAP_MS = 20;
+export const REQUESTED_DATA_PERIOD_MS = 200;
 // не отвечающий блок (не установлен / спит): после первых попыток — раз в 5 мин, каждая попытка держит шину до тайм-аута
 const IDENT_BACKOFF_MS = [0, 5000, 10000, 20000, 40000, 60000, 120000, 300000];
 /** Запись, которую блок отвергает (NRC), — реже: не забивать шину отказами. */
@@ -69,8 +72,6 @@ const VIEW_TARGETS: Record<PollingView, readonly string[]> = {
   systems: ['temperature.gearboxC', 'driveMode', 'dsc.', 'hdc.'],
   cameras: [],
 };
-/** Показания других вкладок продолжают читаться, но не конкурируют с текущей каждую секунду. */
-const BACKGROUND_PERIOD_MS = 5000;
 
 export type IdentState = 'pending' | 'accepted' | 'unverified' | 'failed';
 
@@ -153,7 +154,7 @@ export class UdsReader {
   ) {
     const specs = opts.specs ?? ECUS;
     this.log = opts.log ?? null;
-    this.ecus = specs.map((spec) => ({ spec, ident: 'pending' as IdentState, identity: null, identAttempts: 0, nextIdentAt: 0, identError: null, recs: new Map() }));
+    this.ecus = specs.filter((spec) => !spec.standardThrottle || !!port.readThrottle).map((spec) => ({ spec, ident: (spec.standardThrottle ? 'accepted' : 'pending') as IdentState, identity: null, identAttempts: 0, nextIdentAt: 0, identError: null, recs: new Map() }));
   }
 
   /** Экран приложения виден: только тогда идут запросы. */
@@ -202,7 +203,8 @@ export class UdsReader {
         continue;
       }
       const did = await this.step();
-      await this.sleep(did ? GAP_MS : 100);
+      await this.sleep(GAP_MS);
+      void did;
     }
   }
 
@@ -211,7 +213,7 @@ export class UdsReader {
     const job = this.next(this.now());
     if (!job) return false;
     const started = this.now();
-    const r = await this.port.read(job.ecu.spec.addr, job.rec ? job.rec.schema.did : IDENT_DID);
+    const r = job.ecu.spec.standardThrottle ? await this.port.readThrottle!() : await this.port.read(job.ecu.spec.addr, job.rec ? job.rec.schema.did : IDENT_DID);
     // измеренная стоимость ОТВЕЧЕННОГО запроса (с паузой) — для бюджета шины; тайм-ауты учитываются отсрочкой, не здесь
     if (r.kind === 'ok' || r.kind === 'nrc') this.costMs = this.costMs * 0.8 + (Math.max(0, this.now() - started) + GAP_MS) * 0.2;
     if (!this.running && r.kind === 'closed') return true;
@@ -224,7 +226,7 @@ export class UdsReader {
   private basePeriod(e: EcuState, rec: RecordSpec): number {
     const normal = e.ident !== 'accepted' ? UNVERIFIED_PERIOD_MS
       : rec.diagnosticOnly ? Math.max(rec.periodMs, DIAGNOSTIC_PERIOD_MS)
-      : this.inView(rec) ? rec.periodMs : Math.max(rec.periodMs, BACKGROUND_PERIOD_MS);
+      : rec.outputs.length ? REQUESTED_DATA_PERIOD_MS : rec.periodMs;
     const st = e.recs.get(rec.schema.did);
     // Отвергнутый DID / несовместимый формат уже читается редко. Нельзя резервировать для него
     // исходный быстрый период: на G07 отказ D8EC замедлял все исправные показания.
@@ -358,7 +360,7 @@ export class UdsReader {
   }
 
   private field(e: EcuState, rec: RecordSpec): string {
-    return `UDS ${e.spec.key} ${did4(rec.schema.did)}`;
+    return e.spec.standardThrottle ? (this.port.throttleSource ?? 'DME F411 / OBD 01/11') : `UDS ${e.spec.key} ${did4(rec.schema.did)}`;
   }
 
   private onRecord(e: EcuState, rec: RecordSpec, r: ReadResult): void {

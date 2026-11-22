@@ -110,7 +110,8 @@ const TPMS_MS = 10 * 60 * 1000;
  * Поля только с уведомлениями (руль, педаль) геттера не имеют: их отсчёты — по мере прихода уведомлений.
  */
 export const POLL_FAST_MS = 200;
-export const POLL_TEMP_MS = 5000;
+/** Temperatures follow the 5 Hz getter target. Tyres keep their previous slow poll at the owner's request. */
+export const POLL_TEMP_MS = POLL_FAST_MS;
 /** upstream car_vitals / live_data: TPMS { pollMs: 10000 }. */
 export const POLL_TPMS_MS = 10000;
 

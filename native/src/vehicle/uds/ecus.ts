@@ -9,6 +9,7 @@
 
 import type { SignalId } from '../../../../src/domain/types';
 import {
+  OBD_THROTTLE,
   ACSM_IMU_RAW,
   ACSM5_IMU,
   BDC_FES,
@@ -47,7 +48,7 @@ import {
   type RecordSchema,
 } from './records';
 
-export type EcuKey = 'EGS' | 'LMV' | 'DSC' | 'EPS' | 'VDP' | 'GHAS' | 'BDC' | 'ACSM';
+export type EcuKey = 'DME' | 'EGS' | 'LMV' | 'DSC' | 'EPS' | 'VDP' | 'GHAS' | 'BDC' | 'ACSM';
 
 /**
  * Величины, которых нет в общем домене (смысл отличается от доменных сигналов): давление контуров тормоза (не
@@ -138,6 +139,7 @@ export interface RecordSpec {
 export const DIAGNOSTIC_PERIOD_MS = 20000;
 
 export interface EcuSpec {
+  readonly standardThrottle?: true;
   readonly key: EcuKey;
   readonly addr: number;
   readonly name: string;
@@ -207,6 +209,10 @@ const IB_RECORDS: readonly RecordSpec[] = [
 export const UNVERIFIED_PERIOD_MS = 30000;
 
 export const ECUS: readonly EcuSpec[] = [
+  {
+    key: 'DME', addr: 0x12, name: 'DME OBD 01/11', standardThrottle: true,
+    identities: {}, records: [{ schema: OBD_THROTTLE, periodMs: 200, staleMs: 3000, outputs: [{ value: 'percent', target: sig('engine.throttlePercent') }] }],
+  },
   {
     key: 'EGS',
     addr: 0x18,

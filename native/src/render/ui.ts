@@ -9,8 +9,8 @@ import type { Color, Surface, TextOpts } from '../platform/kitTypes';
 import { T } from '../strings';
 import { C, QUALITY_COLOR, withA } from './palette';
 
-export const FONT_SCALE = 1.2;
-export const fontSize = (size: number): number => Math.max(16, size * FONT_SCALE);
+export const FONT_SCALE = 1.38;
+export const fontSize = (size: number): number => Math.max(18, size * FONT_SCALE);
 
 const NUM_OK = /^[0-9 ,.+\-/:%]*$/;
 
@@ -108,7 +108,7 @@ export interface ReadoutOpts {
 export function readout(cv: Surface, x: number, y: number, o: ReadoutOpts): number {
   const S = READOUT[o.size ?? 'md'];
   const right = o.align === 'right';
-  text(cv, o.label, x, y + S.label, S.label, C.dim, { align: right ? 'right' : 'left' });
+  text(cv, o.label, x, y + fontSize(S.label), S.label, C.dim, { align: right ? 'right' : 'left' });
   const base = y + fontSize(S.label) + 8 + fontSize(S.value) * 0.86;
   if (o.shown.ok) {
     const tight = o.unit === T.units.deg;

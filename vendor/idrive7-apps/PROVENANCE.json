@@ -75,10 +75,10 @@
     {
       "path": "kit/runtime/display.js",
       "status": "modified",
-      "sha256": "1c8c377d94224498cd3cfc99e64fc14a02f0aa40c0e110484ed9caa45875b18c",
+      "sha256": "d9541372479f7a717dbb825118556394372ac984afb2aff4a04f008dc1fab277",
       "upstreamBlob": "3f68b12ceaea688aa373c564fa90810f552f9832",
       "upstreamSha256": "4ae710fb0fdac75b871c4415ed99a5c926528d823c0dce056c0e5da3837cc158",
-      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback); continue checking renderer acknowledgements after startup, refresh software fallback on page changes, clear fallback when acknowledgements resume, and reconnect a hidden connection only while its foreground gate confirms this app; coalesce frames while the renderer waits for its tick using one immutable latest snapshot, discard pending commands when the display connection or placement changes, and transfer controller focus to the tab opened by touch; tag cached recordings by GPU connection and placement, keep software fallbacks out of GPU keepalives, and send a current compatible frame before SHOW"
+      "summary": "the app's brand at the start of the full-screen header (display.brand: width(c), draw), always kept; the badges leave the header where the tabs would not fit beside it; canvas() sets recorder.videoOk while the GPU path shows the screen on a connection offering video; software replay of a cached full-screen frame rebuilds its tab strip (GPU chrome is skipped by software playback); continue checking renderer acknowledgements after startup, refresh software fallback on page changes, clear fallback when acknowledgements resume, and reconnect a hidden connection only while its foreground gate confirms this app; coalesce frames while the renderer waits for its tick using one immutable latest snapshot, discard pending commands when the display connection or placement changes, and transfer controller focus to the tab opened by touch; tag cached recordings by GPU connection and placement, keep software fallbacks out of GPU keepalives, and send a current compatible frame before SHOW; clear stale fallback on READY and retry a lost foreground surface at most three times while the HMI screen has focus; use a slim tab focus marker instead of a red outline"
     },
     {
       "path": "kit/runtime/ecus.js",
@@ -150,10 +150,10 @@
     {
       "path": "kit/runtime/gauges.js",
       "status": "modified",
-      "sha256": "1ad733d8d364c782e0d69910b0b2b016115204dbf762b148a502df947cdd09ad",
+      "sha256": "dd06502ead911daee99df578758e0a0ba09cce3bb0ade4eeee95316f087a601e",
       "upstreamBlob": "040ab86080dfbcad94a535b319ef846a36430031",
       "upstreamSha256": "3b0d56a3f2b57fc7e7698cb6a93a705a4ef0017205f2d0d8848cda20ec87ef06",
-      "summary": "page tab fonts and badges enlarged by 20 percent in software and GPU headers, with matching text measurements"
+      "summary": "page tab fonts and badges enlarged by 38 percent from the original in software and GPU headers, with matching text measurements"
     },
     {
       "path": "kit/runtime/hmi-text.js",

@@ -81,7 +81,8 @@ export interface CameraDeps {
 export const SCREEN = 'MAIN';
 export const GRAPHIC = 'MAIN_GFX';
 /** Частота программного пути (без GPU-рендерера); с рендерером kit вызывает отрисовку каждый кадр дисплея. */
-export const SOFTWARE_FPS = 10;
+export const SOFTWARE_FPS = 5;
+export const DATA_FRAME_MS = 200;
 /** Индекс страницы «Камеры» (PAGES). */
 export const CAMERA_PAGE = 4;
 /** Индекс страницы «Системы» (PAGES). */
@@ -219,7 +220,10 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
   };
   const phases = new Phases();
   let page = 0;
+  let selectedCamera: CameraId = 'front';
+  let cameraExpanded = false;
   let lastFrame: number | null = null;
+  let lastRenderedAt = -Infinity;
   let lastNote: string | null | undefined;
   let disposed = false;
   let loop: LoopHandle | null = null;
@@ -286,6 +290,7 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
   };
 
   const render = () => {
+    lastRenderedAt = now();
     const cv = ctx.canvas(W, H);
     cv.clear(C.bg);
     const theme = ctx.theme();
@@ -314,6 +319,10 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
       dials,
       layer: (key, w, h, draw) => kit.G.layer(key, w, h, draw, (cv as Surface).textScale),
       nowMs: t,
+      selectedCamera,
+      cameraExpanded,
+      selectCamera: (id) => { selectedCamera = id; cameraExpanded = false; kick(); return render(); },
+      toggleCamera: () => { cameraExpanded = !cameraExpanded; kick(); return render(); },
       button,
       newSession,
       openDiagnostics: dev.diagnostics && ctx.sheet ? () => (openDiagnostics(), null) : null,
@@ -335,7 +344,9 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
 
   const setPage = (i: number) => {
     page = ((i % PAGES.length) + PAGES.length) % PAGES.length;
+    lastRenderedAt = -Infinity;
     const views: readonly PollingView[] = ['terrain', 'traction', 'suspension', 'systems', 'cameras'];
+    if (page !== CAMERA_PAGE) cameraExpanded = false;
     model.setView(views[page]);
     updateCameras();
     kick();
@@ -356,7 +367,10 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
   // Знак приложения в начале шапки (вендорная правка display.js; без неё свойство ни на что не влияет).
   if (ctx.display) ctx.display.brand = HEADER_BRAND;
 
-  loop = ctx.loop(SCREEN, SOFTWARE_FPS, render);
+  loop = ctx.loop(SCREEN, SOFTWARE_FPS, () => {
+    // Video textures advance in the compositor. Data and expensive page recording need only 5 Hz.
+    if (now() - lastRenderedAt >= DATA_FRAME_MS) return render();
+  });
 
   // process 'exit': асинхронный detach уже не уйдёт (Node не выполняет ввод-вывод после обработчиков exit) —
   // cookie отпускается при уходе со страницы и в 'shutdown'; здесь только записать, если он ещё держится

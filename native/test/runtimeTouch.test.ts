@@ -137,7 +137,6 @@ async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess; ca
   const log = { info: () => undefined, warn: () => undefined, error: (...a: unknown[]) => console.error('[display]', ...a) };
   const display = new Display(ui, log, spec, settings, () => THEME);
 
-  let loopFn: (() => unknown) | null = null;
   const ctx: MguCtx = {
     ui: {
       image: (name, cv) => display.present(name, cv, (_n: string, c: unknown) => (softImages.push(c as { d: Uint8Array; w: number; h: number }), Promise.resolve())),
@@ -151,7 +150,7 @@ async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess; ca
     theme: () => THEME,
     canvas: (w, h) => display.canvas(w, h),
     loop: (_s, _f, fn) => {
-      loopFn = fn;
+      void fn;
       return { stop: () => undefined, kick: () => undefined };
     },
     onTab: (fn) => (display.onTab = fn),
@@ -181,7 +180,7 @@ async function rig(opts: { native: boolean; touch?: boolean; dev?: DevAccess; ca
     hmiVisible,
     softImages,
     render: async () => {
-      await loopFn!();
+      await app.render();
       await flush();
     },
     tapScreen: (sx, sy) => {
@@ -781,5 +780,26 @@ describe('рендерер пропал / перезапуск / штатный 
     } finally {
       await r.close();
     }
+  });
+});
+
+describe('восстановление уменьшенного интерфейса', () => {
+  it('новый READY снимает старый fallback и восстанавливает полную поверхность после ограниченного reconnect', async () => {
+    const r = await rig({ native: true, caps: 1 | 2 | 4 | 8 });
+    let repeating: NodeJS.Timeout | null = null;
+    try {
+      await r.render();
+      const p = Buffer.alloc(12);
+      r.srv.send(0x4d520102, p);
+      repeating = setInterval(() => r.srv.send(0x4d520102, p), 300);
+      await r.srv.until(() => r.srv.conns.length >= 2 && !!r.display.gpu!.ready, 'переподключение потерянной поверхности', 5500);
+      clearInterval(repeating); repeating = null;
+      await r.render();
+      const d = r.display as unknown as { blocked: boolean; frontTries: number };
+      assert.equal(d.blocked, false);
+      assert.equal(r.display.place!.full, true);
+      assert.equal(r.display.own(), true);
+      assert.equal(d.frontTries, 1, 'одна попытка, без бесконечного переподключения');
+    } finally { if (repeating) clearInterval(repeating); await r.close(); }
   });
 });

@@ -116,7 +116,7 @@ describe('отрисовка: строгая поверхность (тольк�
       const k = kit as ReturnType<typeof fakeKit>;
       const cvs = await drawAll(ctx, app);
       cvs.forEach((cv, p) => {
-        assert.ok(cv.counts.fillRect > 5, `${sc}/${p}: страница пуста`);
+        assert.ok(cv.counts.fillRect >= (p === 4 ? 3 : 6), `${sc}/${p}: страница пуста`);
         checkTexts(cv, `${sc}/${p}`);
       });
       const fr = k.frames[k.frames.length - 1] as { tabs: string[]; badges: { text: string }[] };
@@ -270,7 +270,7 @@ describe('отрисовка: настоящий Recorder и программн�
           app.model.setPaused(paused);
           await ctx.loopFn!();
           const rec = ctx.shown[ctx.shown.length - 1].cv as unknown as { targets: { y: number; key: string }[] };
-          assert.deepEqual(rec.targets.map((t) => t.key), [], `${sc}/${page}`);
+          assert.deepEqual(rec.targets.map((t) => t.key), page === 4 ? ['camera:front', 'camera:left', 'camera:right'] : [], `${sc}/${page}`);
         }
       }
       app.dispose();

@@ -687,8 +687,8 @@ function frame(cv, t, tabs, sel, badges) {
     const opt = { align: 'center', font: 'bold', spacing: 1.5 };
     const live = (badges || []).filter(Boolean);
     const labels = (tabs || []).map((n) => upperText(n));
-    const badgesW = live.reduce((a, b) => a + Math.max(24 * 3.5, cv.textWidth(b.text, 21.6, opt) + 24) + 24 * 0.4, 0);
-    const widths = tabWidths(cv, labels, 24, opt, 150, 48, W - 32 - badgesW, 20);
+    const badgesW = live.reduce((a, b) => a + Math.max(27.6 * 3.5, cv.textWidth(b.text, 24.84, opt) + 27.6) + 27.6 * 0.4, 0);
+    const widths = tabWidths(cv, labels, 27.6, opt, 150, 48, W - 32 - badgesW, 20);
     let x = 16;
     cv.tabRects = [];
     labels.forEach((label, i) => {
@@ -698,11 +698,11 @@ function frame(cv, t, tabs, sel, badges) {
             cv.gradientRect(x, 0, tw, BAR_H, [[0, withAlpha(S, 0)], [1, withAlpha(S, 0.22)]]);
             cv.fillRect(x, BAR_H - 4, tw, 4, S);
         }
-        cv.text(label, x + tw / 2, 27, 24, on ? t.selText || S : t.dim, opt);
+        cv.text(label, x + tw / 2, 27, 27.6, on ? t.selText || S : t.dim, opt);
         if (i < tabs.length - 1) cv.fillRect(x + tw, 9, 1, BAR_H - 18, withAlpha('#ffffff', 0.12));
         x += tw;
     });
-    badgeRow(cv, t, W - 16, 6, 24, 21.6, (badges || []).filter(Boolean));
+    badgeRow(cv, t, W - 16, 6, 27.6, 24.84, (badges || []).filter(Boolean));
 }
 
 /** Badges right-aligned at xr (right edge), top y, height h, text size. Returns the left edge. */
@@ -710,7 +710,7 @@ function badgeRow(cv, t, xr, y, h, size, badges) {
     const opt = { align: 'center', font: 'bold', spacing: 1.5 };
     let bx = xr;
     badges.forEach((b) => {
-        const bw = Math.max(h * 3.5, cv.textWidth(b.text, size, opt) + h), c = t[b.color] || b.color || t.warn;
+        const bw = Math.max(h * 2.2, cv.textWidth(b.text, size, opt) + h), c = t[b.color] || b.color || t.warn;
         cv.roundRect(bx - bw, y, bw, h, h * 0.2, withAlpha(c, 0.2));
         cv.text(b.text, bx - bw / 2, y + h / 2 + size * 0.36, size, c, opt);
         bx -= bw + h * 0.4;
@@ -733,12 +733,12 @@ function header(cv, t, x, y, w, h, title, tabs, sel, badges, flat, compact) {
     // flat: plain, to match the HMI's own black strip next to it
     if (!flat) cv.gradientRect(x, y, w, h, [[0, withAlpha('#ffffff', 0.02)], [1, withAlpha('#ffffff', 0.08)]]);
     cv.fillRect(x, y + h - 2, w, 2, withAlpha('#ffffff', 0.22));
-    const right = badgeRow(cv, t, x + w - 16, y + (h - 34) / 2, 34, 21.6, badges || []);
+    const right = badgeRow(cv, t, x + w - 16, y + (h - 34) / 2, 34, 24.84, badges || []);
     const names = (tabs || []).map((n) => upperText(n));
-    const tw = tabWidths(cv, names, 24, opt, 170, 64, right - x - 20, 24);
+    const tw = tabWidths(cv, names, 27.6, opt, 170, 64, right - x - 20, 27.6);
     const tabsW = tw.reduce((a, b) => a + b, 0);
     let tx = x + 20;
-    const tsize = 45.6, titleW = title ? cv.textWidth(title, tsize) : 0;
+    const tsize = 52.44, titleW = title ? cv.textWidth(title, tsize) : 0;
     if (title && tx + titleW + 40 + tabsW <= right) {
         cv.text(title, tx, y + h / 2 + tsize * 0.36, tsize, t.text);
         tx += titleW + 40;
@@ -752,7 +752,7 @@ function header(cv, t, x, y, w, h, title, tabs, sel, badges, flat, compact) {
             cv.gradientRect(tx, y, bw, h, [[0, withAlpha(S, 0)], [1, withAlpha(S, 0.25)]]);
             cv.fillRect(tx, y + h - 5, bw, 5, S);
         }
-        cv.text(n, tx + bw / 2, y + h / 2 + 9, 24, on ? t.selText || '#ffffff' : t.dim, opt);
+        cv.text(n, tx + bw / 2, y + h / 2 + 9, 27.6, on ? t.selText || '#ffffff' : t.dim, opt);
         if (i < names.length - 1) cv.fillRect(tx + bw, y + h * 0.28, 1, h * 0.44, withAlpha('#ffffff', 0.14));
         tx += bw;
     });
@@ -762,12 +762,12 @@ function headerCompact(cv, t, x, y, w, h, title, tabs, sel, badges) {
     const S = t.sel || t.accent, opt = { align: 'center', font: 'bold', spacing: 1.6 };
     const bopt = { align: 'center', font: 'bold', spacing: 1.5 };
     const names = (tabs || []).map((n) => upperText(n));
-    const bh = 34, bsize = 20.4;
-    const bws = (badges || []).map((b) => Math.max(bh * 3.5, cv.textWidth(b.text, bsize, bopt) + bh));
+    const bh = 34, bsize = 23.46;
+    const bws = (badges || []).map((b) => Math.max(bh * 2.2, cv.textWidth(b.text, bsize, bopt) + bh));
     const badgesW = bws.reduce((a, b) => a + b + bh * 0.4, 0);
-    const tsize = 38.4, titleW = title ? cv.textWidth(title, tsize) : 0;
+    const tsize = 44.16, titleW = title ? cv.textWidth(title, tsize) : 0;
     const room = w - 20 - (badgesW ? badgesW + 12 : 0);
-    const tw = tabWidths(cv, names, 21.6, opt, 132, 44, room - 20, 20);
+    const tw = tabWidths(cv, names, 24.84, opt, 132, 44, room - 20, 4);
     const tabsW = tw.reduce((a, b) => a + b, 0);
     // the tabs start 20 px in: the name shows only where every tab still fits after it (else the last tab, Settings, drops)
     const showTitle = title && 20 + titleW + 32 + tabsW <= room;
@@ -791,7 +791,7 @@ function headerCompact(cv, t, x, y, w, h, title, tabs, sel, badges) {
             cv.gradientRect(tx, y, bw, h, [[0, withAlpha(S, 0)], [1, withAlpha(S, 0.25)]]);
             cv.fillRect(tx, y + h - 4, bw, 4, S);
         }
-        cv.text(n, tx + bw / 2, y + h / 2 + 8, 21.6, on ? t.selText || '#ffffff' : t.dim, opt);
+        cv.text(n, tx + bw / 2, y + h / 2 + 8, 24.84, on ? t.selText || '#ffffff' : t.dim, opt);
         if (i < names.length - 1) cv.fillRect(tx + bw, y + h * 0.3, 1, h * 0.4, withAlpha('#ffffff', 0.14));
         tx += bw;
     });

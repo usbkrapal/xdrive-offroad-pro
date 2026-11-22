@@ -546,3 +546,11 @@ export function decodeExact(schema: RecordSchema, p: readonly number[]): { ok: t
   if (schema.length >= 0 && p.length !== schema.length) return { ok: false, error: `длина ${p.length}, ожидалась ${schema.length}` };
   return { ok: true, rec: schema.decode(p) };
 }
+
+/** SAE J1979 service 01 PID 11: absolute throttle plate position, A × 100 / 255 %.
+ * Primary implementation: idrive7-apps apps/live_data/std.js @df4c5fc (not accelerator pedal).
+ * An explicit negative response means unavailable; no diesel/pedal substitution. */
+export const OBD_THROTTLE: RecordSchema = {
+  did: 0x11, name: 'OBD 01/11 THROTTLE', length: 1,
+  decode(p): DecodedRecord { return { values: { percent: p[0] * 100 / 255 }, reasons: NONE }; },
+};

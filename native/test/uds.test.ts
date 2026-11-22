@@ -11,7 +11,7 @@ import { createSession, ingestSample } from '../../src/domain/session';
 import { WHEELS } from '../../src/domain/types';
 import { diagnosticsLines, udsLines } from '../src/render/diagnostics';
 import { ECUS, recordsFor, type EcuSpec } from '../src/vehicle/uds/ecus';
-import { UdsReader, type UdsOutput } from '../src/vehicle/uds/reader';
+import { GAP_MS, UdsReader, type UdsOutput } from '../src/vehicle/uds/reader';
 import {
   decodeExact,
   ACSM_IMU_RAW,
@@ -147,13 +147,14 @@ function fakeTasu(respond: Responder, opts: { verdicts?: string[]; available?: b
       if (verdict === 'NO_ERROR') {
         const ecu = params.targetAddress as number;
         const d = Array.from(params.udsData as Buffer);
-        const did = (d[0] << 8) | d[1];
+        const sid = params.serviceID as number;
+        const did = sid === 0x01 ? d[0] : (d[0] << 8) | d[1];
         setTimeout(() => {
           for (const r of respond(ecu, did)) {
             if (r === 'none') continue;
-            if (r === 'pending') emit!(frame(ecu, [0x7f, 0x22, 0x78]));
-            else if (!Array.isArray(r)) emit!(frame(ecu, [0x7f, 0x22, (r as { nrc: number }).nrc]));
-            else emit!(frame(ecu, [0x62, d[0], d[1], ...(r as number[])]));
+            if (r === 'pending') emit!(frame(ecu, [0x7f, sid, 0x78]));
+            else if (!Array.isArray(r)) emit!(frame(ecu, [0x7f, sid, (r as { nrc: number }).nrc]));
+            else emit!(frame(ecu, sid === 0x01 ? [0x41, d[0], ...(r as number[])] : [0x62, d[0], d[1], ...(r as number[])]));
           }
         }, 2);
       }
@@ -182,6 +183,7 @@ describe('UDS: узкий транспорт чтения', () => {
     await assert.rejects(() => t.read(0xdf, 0xf150), /not allowed/, 'функциональный адрес');
     assert.equal(f.calls.length, 0);
     for (const e of ECUS) {
+      if (e.standardThrottle) { assert.deepEqual(READ_ALLOWLIST[e.addr], [0xf411]); continue; }
       const dids = new Set([0xf150, ...e.records.map((r) => r.schema.did)]);
       for (const k of Object.keys(e.variants ?? {})) for (const r of e.variants![k]) dids.add(r.schema.did);
       assert.deepEqual([...READ_ALLOWLIST[e.addr]].sort(), [...dids].sort(), e.key);
@@ -368,7 +370,7 @@ describe('UDS: идентификация и планировщик', () => {
     assert.equal(count(0x76, 0xdc05), 1, 'VDP DC05 один раз до 30 с');
     assert.equal(count(0x30, 0xf150), 1, 'EPS F150 повторится только через 5 с');
     at(5000);
-    await steps(3);
+    await steps(30);
     assert.equal(count(0x30, 0xf150), 2);
     at(31000);
     await steps(25);
@@ -825,7 +827,8 @@ describe('UDS: расписание на последовательной шин
     const run = async (untilMs: number) => {
       while (now < untilMs) {
         const did = await r.step();
-        now += did ? 150 : 100; // GAP_MS / ожидание, как в run()
+        now += GAP_MS; // текущая пауза run(), включая ожидание срока
+        void did;
       }
     };
     return { r, out, run, now: () => now };
@@ -910,7 +913,7 @@ describe('UDS: расписание на последовательной шин
     assert.ok(level().periodMs < 30000, 'отсрочка снята');
   });
 
-  it('на «Сцеплении» колёса обновляются быстрее, фоновые показания не голодают, отказы сохраняют отсрочку', async () => {
+  it('общая цель 5 Гц сохраняется при смене вкладок, фоновые показания не голодают, отказы сохраняют отсрочку', async () => {
     const all = g07Bus({ latencyMs: 200, refusedDid: '76:d8ec' });
     const focused = g07Bus({ latencyMs: 200, refusedDid: '76:d8ec' });
     focused.r.setView('traction');
@@ -919,7 +922,7 @@ describe('UDS: расписание на последовательной шин
     const before = intervals(all.out, 'wheelSpeed.FL', 30000);
     const after = intervals(focused.out, 'wheelSpeed.FL', 30000);
     console.log(`traction wheel median ${before.median} -> ${after.median} ms; p95 ${before.p95} -> ${after.p95}`);
-    assert.ok(after.median < before.median && after.p95 <= before.p95);
+    assert.ok(after.median <= before.median * 1.1 && after.p95 <= before.p95 * 1.1, 'смена вкладки не замедляет общую частоту');
     for (const id of ['temperature.gearboxC', 'rideHeightSensor.FL', 'driveMode']) {
       assert.ok(worst(focused.out, id, 30000).n >= 10, `${id}: фоновый опрос продолжается`);
     }
@@ -949,5 +952,59 @@ describe('UDS: расписание на последовательной шин
     assert.ok(w.ratio <= 1, `колёса: ${w.ratio.toFixed(2)}`);
     // DB29 — без значений (устаревает честно), но не каждые 500 мс
     assert.equal(out.filter((o) => o.target.id === 'brakePressure.system' && o.value !== null).length, 0);
+  });
+});
+
+describe('OBD: только положение дросселя двигателя', () => {
+  it('F411 → OBD 01/11, чужие PID игнорируются, UDS ждёт завершения и выбранный маршрут запоминается', async () => {
+    const f = fakeTasu(() => ['none']);
+    const t = await new ReadOnlyTasu(f.signals, { ...FAST, replyTimeoutMs: 1000, hardTimeoutMs: 3000 }).init();
+    const a = t.readThrottle();
+    const b = t.read(0x18, 0x6000);
+    await flush();
+    assert.equal(f.calls.length, 1);
+    assert.deepEqual(Array.from(f.calls[0].params.udsData as Buffer), [0xf4, 0x11]);
+    f.emit(frame(0x12, [0x7f, 0x22, 0x31])); await flush();
+    assert.equal(f.calls.length, 2);
+    const p = f.calls[1].params;
+    assert.deepEqual([p.targetAddress, p.serviceID, p.subroutineID, p.udsDataLength, Array.from(p.udsData as Buffer)], [0x12, 1, 0, 1, [0x11]]);
+    f.emit(frame(0x12, [0x41, 0x45, 128])); await flush();
+    assert.equal(f.calls.length, 2, 'чужой PID не завершает запрос и не запускает UDS');
+    f.emit(frame(0x12, [0x41, 0x11, 128]));
+    assert.deepEqual(await a, { kind: 'ok', payload: [128] }); await flush();
+    assert.equal(f.calls.length, 3);
+    f.emit(frame(0x18, [0x62, 0x60, 0, 0x5a]));
+    assert.deepEqual(await b, { kind: 'ok', payload: [0x5a] });
+    assert.equal(t.throttleSource, 'OBD DME 01/11');
+    const again = t.readThrottle(); await flush();
+    assert.equal(f.calls[3].params.serviceID, 1, 'отвергнутый F411 не повторяется');
+    f.emit(frame(0x12, [0x41, 0x11, 0]));
+    assert.deepEqual(await again, { kind: 'ok', payload: [0] });
+    assert.equal(allowedRead(0x12, 0x11), false);
+    t.close();
+  });
+
+  it('поддерживаемый F411 сразу используется, без лишнего OBD запроса', async () => {
+    const f = fakeTasu(() => [[64]]);
+    const t = await new ReadOnlyTasu(f.signals, FAST).init();
+    assert.deepEqual(await t.readThrottle(), { kind: 'ok', payload: [64] });
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].params.serviceID, 0x22);
+    assert.equal(t.throttleSource, 'UDS DME F411');
+    t.close();
+  });
+
+  it('стандартный PID не требует догадки о варианте DME, отрицательный ответ не становится нулём', async () => {
+    let time = 0, refused = false;
+    const out: UdsOutput[] = [];
+    const spec = ECUS.find((e) => e.standardThrottle)!;
+    const r = new UdsReader({ available: true, read: async () => { throw Error('no UDS identity required'); }, readThrottle: async () => refused ? { kind: 'nrc', nrc: 0x12 } : { kind: 'ok', payload: [128] }, close() {} }, () => time, (x) => out.push(x), async () => {}, { specs: [spec] });
+    await r.step();
+    assert.equal(out[0].target.id, 'engine.throttlePercent');
+    assert.ok(Math.abs(out[0].value! - 128 * 100 / 255) < 1e-9);
+    time = Math.ceil(r.diagnostics()[0].records[0].periodMs) + 1; refused = true;
+    await r.step();
+    assert.ok(out[out.length - 1].absent && out[out.length - 1].value === null);
+    assert.ok(r.diagnostics()[0].records[0].periodMs >= 30000, 'неподдерживаемый PID не опрашивается 5 Гц');
   });
 });

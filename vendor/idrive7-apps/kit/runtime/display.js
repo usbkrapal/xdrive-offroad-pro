@@ -181,7 +181,10 @@ class Display {
         gpu.on('ready', () => {
             if (this.gpu !== gpu) return;
             this.shownT = Date.now(); this.tickT = 0; this.softDone = false; this.softFrame = null;
-            this.rendererFront = null; this.pendingFrame = null;
+            // A new READY starts a new placement. A previous fallback must not lock this connection out.
+            clearTimeout(this.frontTimer); this.frontTimer = null;
+            clearTimeout(this.frontRecovery); this.frontRecovery = null;
+            this.blocked = false; this.rendererFront = null; this.pendingFrame = null;
             this._place(); this._syncVisible(); this._grab();
         });
         gpu.on('tick', () => {
@@ -197,7 +200,7 @@ class Display {
                 this._send(latest.name, latest.frame, latest.softImage, true);
             }
         });
-        gpu.on('close', () => { if (this.gpu === gpu) { clearTimeout(this.frontTimer); this.blocked = false; this._lost(); } });
+        gpu.on('close', () => { if (this.gpu === gpu) { clearTimeout(this.frontTimer); clearTimeout(this.frontRecovery); this.frontRecovery = null; this.blocked = false; this._lost(); } });
         gpu.on('stats', (s) => { this.gpuStats = s; });
         // mgu-render/1: the renderer shows the app only while its foreground gate has it in front. A screen
         // that stays shown here while the gate says otherwise (seen: a leftover install claiming the same
@@ -205,19 +208,25 @@ class Display {
         gpu.on('state', (st) => {
             if (this.gpu !== gpu) return;
             this.rendererFront = st.front;
-            clearTimeout(this.frontTimer);
             if (st.front) {
+                clearTimeout(this.frontTimer); this.frontTimer = null;
+                this.frontTries = 0;
+                clearTimeout(this.frontRecovery); this.frontRecovery = null;
                 this._ctlRetry(gpu);
                 if (this.blocked) { this.blocked = false; this.log.info('display: renderer has the app in front again'); this.lastWords = null; this._syncVisible(); this._grab(); this._hmiBar(); }
                 return;
             }
+            if (this.blocked) { this._recoverFront(gpu); return; }
+            if (this.frontTimer) return; // repeated STATE(false) must not postpone recovery indefinitely
             this.frontTimer = setTimeout(() => {
+                this.frontTimer = null;
                 if (this.gpu !== gpu || gpu.onScreen || this.blocked || !this._shown()) return;
                 this.blocked = true;
                 this.log.warn('display: the renderer does not have this app in front while its screen shows - drawing in the HMI (journalctl -u mgu-render says why)');
                 this.closeSheet();
                 this._grab();
                 this._lost();                       // (shows the HMI's bar again)
+                this._recoverFront(gpu);
             }, 1500);
         });
         gpu.on('ccu', (v) => { if (this.gpu !== gpu) return; if (this.onCcu && !this.own()) this.onCcu(v); else this._ccu(v); });
@@ -237,6 +246,20 @@ class Display {
      * renderer there has no controller to offer (the gate is iDrive 7's HMI only), so every connection would go
      * again, the picture gone for a moment and every resource uploaded again each time.
      */
+    /** Retry a lost native surface only while our own HMI screen really has focus.
+     * A bounded reconnect asks the compositor to establish its foreground gate afresh;
+     * it never claims a popup or an unrelated app. */
+    _recoverFront(gpu) {
+        if (this.frontRecovery || (this.frontTries || 0) >= 3 || !gpu.native) return;
+        this.frontRecovery = setTimeout(() => {
+            this.frontRecovery = null;
+            if (this.gpu !== gpu || !this.blocked || !this._shown() || gpu.onScreen) return;
+            this.frontTries = (this.frontTries || 0) + 1;
+            if (gpu.reconnect()) this.log.info('display: recovering foreground surface (' + this.frontTries + '/3)');
+        }, 2000);
+        if (this.frontRecovery.unref) this.frontRecovery.unref();
+    }
+
     _ctlRetry(gpu) {
         const now = Date.now();
         if (geometryFor(gpu.screen) !== HMI7) return;
@@ -659,6 +682,7 @@ class Display {
     _syncVisible() {
         if (!this.gpu) return;
         const on = this._shown();
+        if (!on && this.frontRecovery) { clearTimeout(this.frontRecovery); this.frontRecovery = null; }
         if (!on && this.showTimer) { clearTimeout(this.showTimer); this.showTimer = null; }
         if (on && !this.gpu.visible) {
             // the HMI zooms / slides its page in when the screen opens: the picture shows once the page
@@ -920,7 +944,8 @@ class Display {
         if (sx > end) { c.fillRect(end, 0, sx - end, FULL.headH - 2, HMI.headBg); c.fillRect(end, FULL.headH - 2, sx - end, 2, G.withAlpha('#ffffff', 0.22)); }
         // the tab the controller is on (the kit holds it: Display._ccu)
         const ft = this.focusTab != null && (!this.sheet || this.sheetHead) && (c.tabRects || []).find((q) => q.i === this.focusTab);
-        if (ft) c.strokeRoundRect(ft.x + 4, ft.y + 10, ft.w - 8, ft.h - 20, 10, 2, t.sel || t.accent);
+        // Keep the selected tab underline; a second red focus box obscured the section names.
+        if (ft && this.focusTab !== this._tabList().sel) c.fillRect(ft.x + 8, ft.y + ft.h - 5, ft.w - 16, 2, t.dim);
         // the page button (or row) the controller is on, and one just pressed
         const k = pl.scale, onPage = (key) => !this.sheet && key && (this.pageTargets || []).find((q) => 'tgt:' + q.key === key);
         const pt = onPage(this.focusKey), pp = Date.now() - this.pressedT < 300 && onPage(this.pressed);

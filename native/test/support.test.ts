@@ -71,7 +71,7 @@ describe('лист поддержки (скрытый, для фото с экр
     const l = lines(ctx.sheets[0]);
     assert.match(l[0].label, /^Поддержка · Terrain Monitor /);
     assert.equal(l[0].value, 'вкладка «Системы»');
-    assert.equal(l[1].label, 'UDS (только чтение 0x22)');
+    assert.equal(l[1].label, 'Диагностика (чтение UDS / OBD)');
     assert.ok(l.some((x) => x.label.indexOf('LaneSlope') === 0));
     app.dispose();
   });
