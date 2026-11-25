@@ -146,7 +146,33 @@ export function inputLines(display: DisplayApi | undefined): DiagLine[] {
       value: ctl === undefined ? 'рендерер не сообщил' : ctl ? (own ? 'удерживается kit (поворот/нажатие — приложению)' : 'шлюз есть, kit не удерживает') : 'шлюза контроллера нет — поворот, нажатие и наклоны обрабатывает HMI',
       tone: ctl ? 'dim' : 'warn',
     },
+    ...rendererEventLines(display, Date.now()),
     { label: 'Рендерер: видео', value: g && g.info ? (g.info.video ? 'принимает (VIDEO, op 19)' : 'не принимает') : 'рендерер не сообщил', tone: g && g.info && g.info.video ? 'dim' : 'warn' },
+  ];
+}
+
+/**
+ * Что сообщал рендерер (X_STATE, TICK) и что делал kit — для разбора «исчезновения/уменьшения» на машине вместе с
+ * journalctl -u mgu-render («inputs left its picture as it was», «layer apps yield the screen», «covered by the HMI»,
+ * «is claimed by uids», «no frames for 3 s»).
+ */
+export function rendererEventLines(display: DisplayApi | undefined, now: number): DiagLine[] {
+  const e = display && display.stats2;
+  if (!e) return [{ label: 'Рендерер: события', value: 'нет данных (рендерер не подключался)', tone: 'dim' }];
+  const ago = (t: number) => (t ? `${Math.max(0, Math.round((now - t) / 100) / 10).toString().replace('.', ',')} с назад` : 'не было');
+  const st = e.state;
+  return [
+    {
+      label: 'Рендерер: последнее X_STATE',
+      value: st ? `на экране ${st.on ? 1 : 0} · в фронте ${st.front ? 1 : 0} · ${ago(st.t)}` : 'не приходило',
+      tone: st && (!st.on || !st.front) ? 'warn' : 'dim',
+    },
+    { label: 'Рендерер: последний TICK', value: ago(e.tickT), tone: 'dim' },
+    {
+      label: 'Рендерер: события',
+      value: `READY ${e.readies} · обрывов ${e.closes} · переподключений kit ${e.reconnects} · снят при фронте ${e.offScreen} · не в фронте ${e.blocked} · картинок в HMI ${e.softFrames} · ответов на ввод ${e.acks}`,
+      tone: e.offScreen || e.blocked || e.closes ? 'warn' : 'dim',
+    },
   ];
 }
 
@@ -280,7 +306,12 @@ export function startApp(ctx: MguCtx, kit: Kit, assets: AssetsModule | null, now
     return ctx.sheet(
       diagnosticsSheet(
         () => model.diagnostics(),
-        () => supportLines(kind, model.diagnostics(), cameraLines(feeds, camReq), inputLines(ctx.display), APP_VERSION),
+        () => {
+          // «стоит» — только по свежей допустимой скорости, равной нулю (иначе кандидат наклона не считается)
+          const sp = model.getState().snapshot.signals.vehicleSpeedKmh;
+          const standing = sp.quality === 'valid' && typeof sp.value === 'number' ? Math.abs(sp.value) < 0.5 : null;
+          return supportLines(kind, model.diagnostics(), cameraLines(feeds, camReq), inputLines(ctx.display), APP_VERSION, standing);
+        },
       ),
     );
   };

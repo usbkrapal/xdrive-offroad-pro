@@ -92,6 +92,8 @@ const CTL_RETRIES = 3, CTL_RETRY_MS = 30000;   // connecting again for the contr
 
 // the HMI's page animation when a screen opens (the picture shows after it)
 const SHOW_DELAY_MS = 350;
+/** What the renderer said and did, for the app's diagnostics (display.stats2, created on first use). */
+const diagOf = (d) => d.stats2 || (d.stats2 = { state: null, tickT: 0, readies: 0, closes: 0, reconnects: 0, offScreen: 0, blocked: 0, lost: 0, softFrames: 0, acks: 0 });
 
 class Display {
     constructor(ui, log, spec, settings, themeFn) {
@@ -113,6 +115,11 @@ class Display {
         this.ccuLast = null;                         // last controller state (knob counter, press, push)
         this.ownHidden = new Set();                  // more bar buttons left out where the kit runs the screen (hideButton)
         this.brand = null;                           // the app's brand at the header's start: { width(c), draw(c, x, y, w, h, theme) }
+        // what the renderer said and did (the app's diagnostics): last X_STATE, last TICK, READYs, closes, reconnects
+        this.rendererOn = null;
+        // a visible answer to every input the kit takes (mgu-render hides an app whose picture stays as it was
+        // through 4 touches or controller turns: kit/display.js _ack, drawn in _drawChrome)
+        this.ack = null; this.ackSeq = 0;
         G.onConfirm(() => { this.lastWords = null; this.tickHandlers.forEach((fn) => fn()); });   // a reset asks / runs out
         const canvasScreens = (spec.screens || []).filter((s) => s.kind === 'canvas');
         this.screen = canvasScreens[0] || null;
@@ -181,15 +188,15 @@ class Display {
         gpu.on('ready', () => {
             if (this.gpu !== gpu) return;
             this.shownT = Date.now(); this.tickT = 0; this.softDone = false; this.softFrame = null;
+            diagOf(this).readies++;
             // A new READY starts a new placement. A previous fallback must not lock this connection out.
             clearTimeout(this.frontTimer); this.frontTimer = null;
-            clearTimeout(this.frontRecovery); this.frontRecovery = null;
-            this.blocked = false; this.rendererFront = null; this.pendingFrame = null;
+            this.blocked = false; this.rendererFront = null; this.rendererOn = null; this.pendingFrame = null;
             this._place(); this._syncVisible(); this._grab();
         });
         gpu.on('tick', () => {
             if (this.gpu !== gpu) return;
-            this.tickT = Date.now();
+            this.tickT = Date.now(); diagOf(this).tickT = this.tickT;
             if (this.softDone) { this.softDone = false; this.softFrame = null; this.bgShown = null; }
             this.tickHandlers.forEach((fn) => fn());
             // A page change can happen while the renderer still owns the preceding frame. The newest
@@ -200,33 +207,40 @@ class Display {
                 this._send(latest.name, latest.frame, latest.softImage, true);
             }
         });
-        gpu.on('close', () => { if (this.gpu === gpu) { clearTimeout(this.frontTimer); clearTimeout(this.frontRecovery); this.frontRecovery = null; this.blocked = false; this._lost(); } });
+        gpu.on('close', () => { if (this.gpu === gpu) { diagOf(this).closes++; clearTimeout(this.frontTimer); this.frontTimer = null; this.blocked = false; this._lost(); } });
         gpu.on('stats', (s) => { this.gpuStats = s; });
-        // mgu-render/1: the renderer shows the app only while its foreground gate has it in front. A screen
-        // that stays shown here while the gate says otherwise (seen: a leftover install claiming the same
-        // RHMI uuid, which the gate then ignores) is drawn in the HMI's own image until the gate agrees.
+        // mgu-render/1: X_STATE on screen / in front. The renderer takes a layer app off by itself while it is not in
+        // front (gate: another RHMI app holds ROOT_APP), covered by the HMI (a popup, the header menu, the voice
+        // assistant), answering no input (4 touches / turns left its picture as it was: 10 s), silent for 3 s, or while
+        // a camera / video surface of the HMI shows (yield). None of these is the connection's: a new connection gets
+        // the same state, so the kit never reconnects for them (as upstream and every Store app); it waits for the
+        // renderer's next X_STATE. Only "not in front" while our screen still shows is drawn in the HMI's own image.
         gpu.on('state', (st) => {
             if (this.gpu !== gpu) return;
-            this.rendererFront = st.front;
+            const was = this.rendererOn;
+            this.rendererFront = st.front; this.rendererOn = st.onScreen;
+            diagOf(this).state = { on: st.onScreen, front: st.front, t: Date.now() };
+            if (st.onScreen === false && st.front && was !== false) {
+                diagOf(this).offScreen++;
+                this.log.warn('display: renderer took the app off the screen while it is in front (covered by the HMI, no answered input, a camera surface, or silence: journalctl -u mgu-render says which)');
+            }
+            if (st.onScreen && was === false) this.log.info('display: renderer shows the app again');
             if (st.front) {
                 clearTimeout(this.frontTimer); this.frontTimer = null;
-                this.frontTries = 0;
-                clearTimeout(this.frontRecovery); this.frontRecovery = null;
                 this._ctlRetry(gpu);
                 if (this.blocked) { this.blocked = false; this.log.info('display: renderer has the app in front again'); this.lastWords = null; this._syncVisible(); this._grab(); this._hmiBar(); }
                 return;
             }
-            if (this.blocked) { this._recoverFront(gpu); return; }
-            if (this.frontTimer) return; // repeated STATE(false) must not postpone recovery indefinitely
+            if (this.blocked) return;
+            if (this.frontTimer) return; // repeated STATE(false) must not postpone the fallback indefinitely
             this.frontTimer = setTimeout(() => {
                 this.frontTimer = null;
                 if (this.gpu !== gpu || gpu.onScreen || this.blocked || !this._shown()) return;
-                this.blocked = true;
-                this.log.warn('display: the renderer does not have this app in front while its screen shows - drawing in the HMI (journalctl -u mgu-render says why)');
+                this.blocked = true; diagOf(this).blocked++;
+                this.log.warn('display: the renderer does not have this app in front while its screen shows - drawing in the HMI until it does (journalctl -u mgu-render says why; "is claimed by uids": a second install of this app)');
                 this.closeSheet();
                 this._grab();
-                this._lost();                       // (shows the HMI's bar again)
-                this._recoverFront(gpu);
+                this._lost();
             }, 1500);
         });
         gpu.on('ccu', (v) => { if (this.gpu !== gpu) return; if (this.onCcu && !this.own()) this.onCcu(v); else this._ccu(v); });
@@ -246,26 +260,12 @@ class Display {
      * renderer there has no controller to offer (the gate is iDrive 7's HMI only), so every connection would go
      * again, the picture gone for a moment and every resource uploaded again each time.
      */
-    /** Retry a lost native surface only while our own HMI screen really has focus.
-     * A bounded reconnect asks the compositor to establish its foreground gate afresh;
-     * it never claims a popup or an unrelated app. */
-    _recoverFront(gpu) {
-        if (this.frontRecovery || (this.frontTries || 0) >= 3 || !gpu.native) return;
-        this.frontRecovery = setTimeout(() => {
-            this.frontRecovery = null;
-            if (this.gpu !== gpu || !this.blocked || !this._shown() || gpu.onScreen) return;
-            this.frontTries = (this.frontTries || 0) + 1;
-            if (gpu.reconnect()) this.log.info('display: recovering foreground surface (' + this.frontTries + '/3)');
-        }, 2000);
-        if (this.frontRecovery.unref) this.frontRecovery.unref();
-    }
-
     _ctlRetry(gpu) {
         const now = Date.now();
         if (geometryFor(gpu.screen) !== HMI7) return;
         if (!gpu.native || !gpu.info || gpu.info.controller || !this.ownable() || (this.ctlTries || 0) >= CTL_RETRIES || now - (this.ctlTryT || 0) < CTL_RETRY_MS) return;
         this.ctlTries = (this.ctlTries || 0) + 1; this.ctlTryT = now;
-        if (gpu.reconnect()) this.log.info('display: in front without the controller, connecting to the renderer again (' + this.ctlTries + '/' + CTL_RETRIES + ')');
+        if (gpu.reconnect() && ++diagOf(this).reconnects) this.log.info('display: in front without the controller, connecting to the renderer again (' + this.ctlTries + '/' + CTL_RETRIES + ')');
     }
 
     /** the iDrive controller to this app alone while on (GPU renderer + mgu-inputgate.so needed) */
@@ -387,8 +387,34 @@ class Display {
         c.emit('action', {});
     }
 
+    /**
+     * A visible answer to an input the kit took (a tap where it ends, or the controller: its focus mark lit): drawn
+     * for 300 ms in _drawChrome. mgu-render (0.6.20+) takes an app off the screen for 10 s when its picture stays as it
+     * was through 4 touches or controller turns; a tap on a panel without a button, on the tab already open or a
+     * turn at the end of the row changed nothing before. Each answer differs from the one before (seq), so two quick
+     * inputs at the same place still change the picture.
+     */
+    _ack(a) {
+        this.ack = Object.assign({ t: Date.now(), seq: ++this.ackSeq }, a);
+        diagOf(this).acks++;
+        this._repaint();
+        const seq = this.ackSeq;
+        const t = setTimeout(() => { if (this.ackSeq === seq) this._repaint(); }, 320);
+        if (t.unref) t.unref();
+    }
+
     /** The controller (held by the kit): knob, press and push, from the renderer. */
     _ccu(v) {
+        const before = this.ccuLast;
+        this._ccuAct(v);
+        const L = this.ccuLast;
+        if (!before || !L || (L.pb === 15 && L.df === 15)) return;
+        const moved = L.k !== before.k || (L.pb !== before.pb && (L.pb === 1 || L.pb === 2)) || (L.df !== before.df && TILT[L.df]);
+        if (!moved || !this.own() || !this.active()) return;
+        if (!this.focusKey && !this.sheet) { const sel = this._tabList().sel; if (sel >= 0) this._focus({ k: 'tab:' + sel, tab: sel }); }
+        this._ack({ ctl: true });
+    }
+    _ccuAct(v) {
         const k = Number(v.frontRotaryEncoderOperation), pb = Number(v.frontRotaryEncoderPushButton), df = Number(v.frontRotaryEncoderDeflection);
         const L = this.ccuLast;
         this.ccuLast = { k, pb, df };
@@ -493,6 +519,8 @@ class Display {
         const inside = (r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
         if (this.own()) {
             const pl = this.place, sx = x * pl.scale + pl.ox, sy = y * pl.scale + pl.oy;
+            // a tap (not the end of a drag): answer it where it ends, whatever it lands on
+            if (phase === 3 && !this.dragging && this.downAt && this.active()) this._ack({ x: sx, y: sy });
             const bar = sy >= pl.h - this.barH() ? this.buttons().find((b) => sx >= b.x - this.barOff - pl.x && sx < b.x - this.barOff - pl.x + b.w) : null;
             // the header's tabs (Settings among them) work over a sheet too
             const tab = !bar && (this.tabs || []).find(inside);
@@ -567,6 +595,7 @@ class Display {
 
     /** GPU path gone (or off): the HMI's own image shows again - push a frame now. */
     _lost() {
+        diagOf(this).lost++;
         this.pendingFrame = null;
         this.lastWords = null; this.bgShown = null;
         this.ui._invalidate && this.ui._invalidate();
@@ -884,18 +913,18 @@ class Display {
     _softIfNoTick() {
         const L = this.last, now = Date.now(), lastTick = Math.max(this.shownT || 0, this.tickT || 0);
         if (!L || !this.active() || !lastTick || now - lastTick < 2000) return;
+        // The renderer said it took us off (X_STATE on screen 0): it shows us again by itself. The HMI's image gets one
+        // picture of the page meanwhile (under a popup or a camera it is not seen at all), not one per frame.
+        const off = this.rendererOn === false;
         if (!this.softDone) {
             this.softDone = true;
-            this.log.warn('display: no frame taken by the renderer for 2 s - updating the HMI image until ticks resume');
+            this.log.warn(off ? 'display: renderer has the app off the screen - one picture in the HMI image until it shows it again'
+                : 'display: no frame taken by the renderer for 2 s - updating the HMI image until ticks resume');
         }
-        if (this.softFrame !== L) {
-            this.softFrame = L;
+        if (off ? !this.softFrame : this.softFrame !== L) {
+            this.softFrame = L; diagOf(this).softFrames++;
             const cv = this._softwareFrame(L);
             Promise.resolve(L.softImage(L.name, cv)).catch(() => {});
-        }
-        if (now - lastTick >= 6000 && this.rendererFront === true && this.gpu.onScreen === false && now - (this.renderRetryT || 0) >= CTL_RETRY_MS) {
-            this.renderRetryT = now;
-            if (this.gpu.reconnect()) this.log.warn('display: renderer hidden while this app is in front and ticks stopped - reconnecting');
         }
     }
 
@@ -944,12 +973,19 @@ class Display {
         if (sx > end) { c.fillRect(end, 0, sx - end, FULL.headH - 2, HMI.headBg); c.fillRect(end, FULL.headH - 2, sx - end, 2, G.withAlpha('#ffffff', 0.22)); }
         // the tab the controller is on (the kit holds it: Display._ccu)
         const ft = this.focusTab != null && (!this.sheet || this.sheetHead) && (c.tabRects || []).find((q) => q.i === this.focusTab);
-        // Keep the selected tab underline; a second red focus box obscured the section names.
-        if (ft && this.focusTab !== this._tabList().sel) c.fillRect(ft.x + 8, ft.y + ft.h - 5, ft.w - 16, 2, t.dim);
+        // The tab the controller is on, the open one too: a slim line at the tab's top (no outline over the names; the
+        // open tab keeps its underline). Lit for a moment by each controller input (_ack), so a turn or press that
+        // moves nothing still shows it was taken.
+        const ak = this.ack && Date.now() - this.ack.t < 300 ? this.ack : null;
+        const lit = ak && ak.ctl;
+        if (ft) c.fillRect(ft.x + 8, ft.y + 5, ft.w - 16, lit ? 3 + (ak.seq & 1) : 2, lit ? (t.text || '#ffffff') : t.dim);
         // the page button (or row) the controller is on, and one just pressed
         const k = pl.scale, onPage = (key) => !this.sheet && key && (this.pageTargets || []).find((q) => 'tgt:' + q.key === key);
         const pt = onPage(this.focusKey), pp = Date.now() - this.pressedT < 300 && onPage(this.pressed);
         if (pp) c.roundRect(pp.x * k + pl.ox, pp.y * k + pl.oy, pp.w * k, pp.h * k, (pp.r != null ? pp.r : pp.h / 2) * k, G.withAlpha(t.sel || t.accent, 0.35));
+        // a tap's answer: a thin ring where the finger lifted
+        if (ak && !ak.ctl) { const r = 22 + (ak.seq & 1) * 4; c.strokeRoundRect(ak.x - r, ak.y - r, 2 * r, 2 * r, r, 2, G.withAlpha('#ffffff', 0.55)); }
+        if (pt && lit) c.strokeRoundRect(pt.x * k + pl.ox - 8, pt.y * k + pl.oy - 8, pt.w * k + 16, pt.h * k + 16, (pt.r != null ? pt.r : pt.h / 2) * k + 8, 1 + (ak.seq & 1), G.withAlpha('#ffffff', 0.6));
         // the controller on a page that scrolls: a frame round the page; on a list (cv.scroll = { y, bar }) its
         // scroll bar in the colour of the selection (bar: where the page drew it, so it moves with the list)
         const sb = this.focusKey === 'scroll' && !this.sheet && this.pageScroll;

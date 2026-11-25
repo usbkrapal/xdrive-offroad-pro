@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { FIT_MIN_PX } from '../src/render/ui';
 import { after, describe, it } from 'node:test';
 import { SCENARIO_IDS, type ScenarioId } from '../../src/domain/types';
 import { migrateSettings, SETTING_VALUES, startApp, type AppHandle } from '../src/app';
@@ -48,7 +49,8 @@ function checkTexts(cv: ReturnType<typeof strictSurface>, where: string): void {
   for (const tc of cv.texts) {
     assert.equal(tc.literal, true, `${where}: текст без literal: «${tc.s}»`);
     if (tc.font === 'num') assert.match(tc.s, NUM_CHARS, `${where}: символ вне цифрового атласа: «${tc.s}»`);
-    assert.ok(tc.size >= 16, `${where}: слишком мелкий текст ${tc.size}px «${tc.s}»`);
+    // 0.1.8: обычный текст ≥ MIN_PX; подогнанный к ячейке — не меньше FIT_MIN_PX (≈ 16 px на экране 1920 × 720)
+    assert.ok(tc.size >= FIT_MIN_PX, `${where}: слишком мелкий текст ${tc.size}px «${tc.s}»`);
   }
 }
 

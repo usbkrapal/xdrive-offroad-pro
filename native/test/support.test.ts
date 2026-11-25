@@ -10,11 +10,17 @@ import { laneSlopeLines, SupportTaps, SUPPORT_WINDOW_MS } from '../src/render/su
 import { memberShape } from '../src/vehicle/adapter';
 import { fakeCtx, fakeKit, FakeTransport, syntheticAssets } from './helpers';
 
-function launch() {
+type Launched = { ctx: ReturnType<typeof fakeCtx>; app: ReturnType<typeof startApp>; at: (ms: number) => number };
+/** Запуск приложения на время теста: dispose() — всегда, даже когда проверка упала (иначе его таймеры держат Node). */
+async function withApp(fn: (l: Launched) => void | Promise<void>): Promise<void> {
   let t = 0;
   const ctx = fakeCtx(new FakeTransport(), {}, { own: true });
   const app = startApp(ctx, fakeKit(), syntheticAssets(), () => t, PRODUCTION);
-  return { ctx, app, at: (ms: number) => (t = ms) };
+  try {
+    await fn({ ctx, app, at: (ms: number) => (t = ms) });
+  } finally {
+    await app.dispose();
+  }
 }
 const lines = (sh: object) => {
   const s = sh as { refresh(): void; lines: DiagLine[] };
@@ -23,8 +29,7 @@ const lines = (sh: object) => {
 };
 
 describe('лист поддержки (скрытый, для фото с экрана)', () => {
-  it('длинные имена квалификаторов LaneSlope видны полностью отдельными строками, личные поля скрыты', () => {
-    const { app } = launch();
+  it('длинные имена квалификаторов LaneSlope видны полностью отдельными строками, личные поля скрыты', () => withApp(({ app }) => {
     const qualifier = 'qualifierActualValueLongitudinalGradientRoadway';
     const shape = memberShape({
       crcTiltRoadway: 1,
@@ -40,8 +45,7 @@ describe('лист поддержки (скрытый, для фото с экр
     const rows = laneSlopeLines({ ...d, memberShapes: { 'VehicleModel.LaneSlope': shape } });
     assert.ok(rows.some((row) => row.value === `${qualifier}:int`), 'полное имя и тип видны на листе');
     assert.doesNotMatch(JSON.stringify(rows), /latitude|55\.1|WBA0000000|vin/);
-    app.dispose();
-  });
+  }));
 
   it('счётчик: только та же открытая разрешённая вкладка, 5 касаний за 3 с; другая вкладка и пауза сбрасывают', () => {
     const k = new SupportTaps();
@@ -55,8 +59,7 @@ describe('лист поддержки (скрытый, для фото с экр
     for (let i = 0; i < 6; i++) assert.equal(k.tap(0, 0, false, 20000 + i), false, 'не на «Системах»/«Камерах» — никогда');
   });
 
-  it('«Системы»: 5 касаний открытой вкладки → лист; первая страница — UDS и LaneSlope; страница и режим не меняются', () => {
-    const { ctx, app, at } = launch();
+  it('«Системы»: 5 касаний открытой вкладки → лист; сначала сверка углов с xView и LaneSlope, затем UDS; страница и режим не меняются', () => withApp(({ ctx, app, at }) => {
     ctx.tab!(SYSTEMS_PAGE);
     for (let i = 0; i < 4; i++) {
       at(1000 + i * 200);
@@ -71,13 +74,16 @@ describe('лист поддержки (скрытый, для фото с экр
     const l = lines(ctx.sheets[0]);
     assert.match(l[0].label, /^Поддержка · Terrain Monitor /);
     assert.equal(l[0].value, 'вкладка «Системы»');
-    assert.equal(l[1].label, 'Диагностика (чтение UDS / OBD)');
-    assert.ok(l.some((x) => x.label.indexOf('LaneSlope') === 0));
-    app.dispose();
-  });
+    // 0.1.8: на «Системах» первым — материал для сверки углов (фото листа и xView в одну секунду), затем UDS
+    const head = (re: RegExp) => l.findIndex((x) => x.tone === 'head' && re.test(x.label));
+    const angles = head(/^Углы: сверка с xView/), lane = head(/^LaneSlope/), uds = head(/^Диагностика \(чтение UDS \/ OBD\)$/);
+    assert.equal(angles, 1, 'сверка углов — сразу после заголовка');
+    assert.ok(lane > angles && uds > lane, `порядок: углы ${angles}, LaneSlope ${lane}, UDS ${uds}`);
+    assert.ok(l.some((x) => /^кандидат наклона стоя/.test(x.label)), 'кандидат наклона виден (с пометкой)');
+    assert.ok(l.some((x) => /^Рендерер: события/.test(x.label)), 'события рендерера — для разбора исчезновения');
+  }));
 
-  it('обычное листание вкладок лист не открывает; «Рельеф» — никогда', () => {
-    const { ctx, app, at } = launch();
+  it('обычное листание вкладок лист не открывает; «Рельеф» — никогда', () => withApp(({ ctx, at }) => {
     for (let i = 0; i < 20; i++) {
       at(i * 100);
       ctx.tab!(i % 5);
@@ -88,11 +94,9 @@ describe('лист поддержки (скрытый, для фото с экр
       ctx.tab!(0);
     }
     assert.equal(ctx.sheets.length, 0);
-    app.dispose();
-  });
+  }));
 
-  it('«Камеры»: лист открывается поверх страницы, страница «Камеры» остаётся (запрос/кадры не трогаются); первая строка — камеры', () => {
-    const { ctx, app, at } = launch();
+  it('«Камеры»: лист открывается поверх страницы, страница «Камеры» остаётся (запрос/кадры не трогаются); первая строка — камеры', () => withApp(({ ctx, app, at }) => {
     ctx.tab!(CAMERA_PAGE);
     for (let i = 0; i < 5; i++) {
       at(2000 + i * 100);
@@ -104,6 +108,5 @@ describe('лист поддержки (скрытый, для фото с экр
     assert.equal(l[0].value, 'вкладка «Камеры»');
     assert.equal(l[1].label, 'Камеры');
     assert.ok(!l[2].value.includes('не нужен'), `мост — как его держит страница «Камеры»: ${l[2].value}`);
-    app.dispose();
-  });
+  }));
 });

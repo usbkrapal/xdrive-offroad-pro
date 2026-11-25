@@ -70,10 +70,68 @@ export function laneSlopeLines(d: ModelDiagnostics | null): DiagLine[] {
   return out;
 }
 
+const num = (v: number | null | undefined, d = 2) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toFixed(d).replace('.', ','));
+const DEG = 180 / Math.PI;
+
+/**
+ * Наклон стоящей машины по вектору тяжести ACSM5 (ускорения X/Y/Z, м/с²): pitch = atan2(ax, √(ay² + az²)),
+ * roll = atan2(ay, az). Только кандидат для сверки с xView: оси и знаки монтажа ACSM не сверены, в движении ускорения
+ * не равны наклону — поэтому только при известной нулевой скорости и всех трёх квалификаторах 2. Не на экран.
+ */
+export function standingTiltCandidate(acc: Readonly<Record<string, number | null>> | null, standing: boolean | null): { pitch: number; roll: number } | null {
+  if (!acc || standing !== true) return null;
+  const ax = acc.accX, ay = acc.accY, az = acc.accZ;
+  if (ax == null || ay == null || az == null || acc.accXQualifier !== 2 || acc.accYQualifier !== 2 || acc.accZQualifier !== 2) return null;
+  const g = Math.sqrt(ax * ax + ay * ay + az * az);
+  if (!(g > 7 && g < 12.5)) return null; // не вектор тяжести (тряска, неверная ось или масштаб)
+  return { pitch: Math.atan2(ax, Math.sqrt(ay * ay + az * az)) * DEG, roll: Math.atan2(ay, az) * DEG };
+}
+
+/**
+ * Углы для сверки со штатным xView (фото экрана и xView в одну секунду, машина стоит): сырой LaneSlope, ACSM5 и
+ * кандидат наклона стоя, BDC D54D (кузов к осям — другая величина), время снимка. Ни одна строка не идёт в «Тангаж/Крен».
+ */
+export function attitudeLines(d: ModelDiagnostics | null, standing: boolean | null, now: Date): DiagLine[] {
+  const out: DiagLine[] = [{ label: 'Углы: сверка с xView (кандидаты, не на экране)', value: `снимок ${now.toTimeString().slice(0, 8)}`, tone: 'head' }];
+  out.push({ label: 'как снять', value: 'машина стоит; фото этого листа и xView в одну секунду; 3–4 места, одно — после разворота на 180°', tone: 'dim' });
+  if (!d) return [...out, { label: 'нет', value: 'демо', tone: 'dim' }];
+  const lane = d.latestSamples.filter((x) => x.field === 'LaneSlope').slice(-1)[0];
+  if (lane) {
+    const v = lane.values as Record<string, unknown>;
+    const age = Math.round((d.at - lane.at) / 100) / 10;
+    out.push({ label: 'LaneSlope продольный / поперечный (сырьё)', value: `${String(v.actualValueLongitudinalGradientRoadway ?? '—')} / ${String(v.actualValueTransverseGradientRoadway ?? '—')} · ${num(age, 1)} с назад`, tone: 'ok' });
+  } else out.push({ label: 'LaneSlope', value: 'отсчётов не было', tone: 'warn' });
+  const rec = (key: string, did: string) => {
+    const e = d.uds ? d.uds.ecus.find((x) => x.key === key) : undefined;
+    return { e, r: e ? e.records.find((x) => x.did === did) : undefined };
+  };
+  const acsm = rec('ACSM', '4101');
+  if (acsm.r && acsm.r.values) {
+    const v = acsm.r.values;
+    const age = acsm.r.lastAt !== null && d.uds ? ` · ${num((d.at - acsm.r.lastAt) / 1000, 1)} с назад` : '';
+    out.push({ label: `ACSM ${acsm.e!.identity ?? '?'} ускорения X / Y / Z, м/с²`, value: `${num(v.accX)} / ${num(v.accY)} / ${num(v.accZ)} · кв. ${v.accXQualifier ?? '—'}/${v.accYQualifier ?? '—'}/${v.accZQualifier ?? '—'}${age}`, tone: 'ok' });
+    const c = standingTiltCandidate(v, standing);
+    out.push({
+      label: 'кандидат наклона стоя (оси ACSM не сверены)',
+      value: c ? `тангаж ${num(c.pitch, 1)}° · крен ${num(c.roll, 1)}°` : standing === true ? 'нет: квалификатор ≠ 2 или |g| вне 7…12,5 м/с²' : 'только при известной нулевой скорости',
+      tone: c ? 'ok' : 'dim',
+    });
+  } else {
+    out.push({ label: 'ACSM 4101', value: acsm.r ? (acsm.r.lastError ?? 'разбора нет (вариант не опознан)') : 'не читается', tone: 'warn' });
+    out.push({ label: 'кандидат наклона стоя (оси ACSM не сверены)', value: 'нет: нет разобранного ответа ACSM5 (F150 0F2040)', tone: 'dim' });
+  }
+  const bdc = rec('BDC', 'D54D');
+  if (bdc.r && bdc.r.values) {
+    const v = bdc.r.values;
+    out.push({ label: 'BDC D54D кузов к осям (не к горизонту)', value: `${num(v.pitchCandidateDeg)}° · источник ${v.source ?? '—'} · кв. ${v.qualifier ?? '—'}`, tone: 'dim' });
+  }
+  return out;
+}
+
 /** Первая страница листа: по открытой вкладке — сначала её данные, затем остальное коротко. */
-export function supportLines(kind: 'systems' | 'cameras', d: ModelDiagnostics | null, camera: readonly DiagLine[], renderer: readonly DiagLine[], version: string): DiagLine[] {
+export function supportLines(kind: 'systems' | 'cameras', d: ModelDiagnostics | null, camera: readonly DiagLine[], renderer: readonly DiagLine[], version: string, standing: boolean | null = null, now: Date = new Date()): DiagLine[] {
   const head: DiagLine = { label: `Поддержка · Terrain Monitor ${version}`, value: kind === 'cameras' ? 'вкладка «Камеры»' : 'вкладка «Системы»', tone: 'head' };
   const uds = udsSupportLines(d);
-  const lane = laneSlopeLines(d);
-  return kind === 'cameras' ? [head, ...camera, ...renderer, ...uds, ...lane] : [head, ...uds, ...lane, ...camera, ...renderer];
+  const lane = [...attitudeLines(d, standing, now), ...laneSlopeLines(d)];
+  return kind === 'cameras' ? [head, ...camera, ...renderer, ...uds, ...lane] : [head, ...lane, ...uds, ...camera, ...renderer];
 }

@@ -29,7 +29,7 @@ import { formatNumber, shownNumber, shownSignal } from '../format';
 import type { Pt, Surface } from '../platform/kitTypes';
 import { T } from '../strings';
 import { C, withA } from './palette';
-import { caps, text, width } from './ui';
+import { text, width } from './ui';
 
 export const IMG_W = 1122;
 export const IMG_H = 1402;
@@ -284,7 +284,7 @@ export function drawDrivetrain(cv: Surface, s: SignalMap, ph: Phases, box: Stage
   if (box.full) drawAnnotations(cv, s, box, sc, ox, oy);
 
   if (!anyLive) {
-    text(cv, T.drivetrain.allLost, X(IMG_W / 2), Y(IMG_H / 2), 26, C.warn, { align: 'center' });
+    text(cv, T.drivetrain.allLost, X(IMG_W / 2), Y(IMG_H / 2), 22, C.warn, { align: 'center', maxW: box.w - 12 });
   }
   return sc;
 }
@@ -558,9 +558,11 @@ function drawAnnotations(cv: Surface, s: SignalMap, box: StageBox, sc: number, o
     const lineCol = withA('#f4f7fb', c.ok ? 0.38 : 0.22);
     cv.polyline([[textEnd, cy], [edge, cy], [elbow, cy], [X(c.anchor[0]), Y(c.anchor[1])]], 1.2, lineCol);
     cv.circle(X(c.anchor[0]), Y(c.anchor[1]), 3, C.text);
-    caps(cv, c.label, left ? leftX : rightX, cy - 8, 13, C.dim, left ? 'left' : 'right');
+    // прописные с разрядкой; длинная подпись («ЗАДНИЙ ДИФФЕРЕНЦИАЛ») — с меньшей разрядкой, а не многоточием
+    const capsSpacing = width(cv, c.label.toUpperCase(), 12, { spacing: 1.6 }) <= 184 ? 1.6 : 0.4;
+    text(cv, c.label.toUpperCase(), left ? leftX : rightX, cy - 8, 12, C.dim, { spacing: capsSpacing, align: left ? 'left' : 'right', maxW: 184 });
     c.lines.forEach((ln, i) => {
-      text(cv, ln, left ? leftX : rightX, cy + 18 + i * 26, 17, c.ok ? C.text : C.warn, { align: left ? 'left' : 'right' });
+      text(cv, ln, left ? leftX : rightX, cy + 18 + i * 24, 15, c.ok ? C.text : C.warn, { align: left ? 'left' : 'right', maxW: 184, ellipsis: false });
     });
   }
   for (const w of WHEELS) {
@@ -571,13 +573,13 @@ function drawAnnotations(cv: Surface, s: SignalMap, box: StageBox, sc: number, o
     const codeW = width(cv, t.wheels[w].code, 11);
     if (LEFT(w)) {
       text(cv, t.wheels[w].code, x, y, 11, C.dim, { align: 'right' });
-      text(cv, t.wheels[w].short, x - codeW - 4, y, 16, C.text, { align: 'right' });
+      text(cv, t.wheels[w].short, x - codeW - 6, y, 16, C.text, { align: 'right', attach: true });
     } else {
       text(cv, t.wheels[w].short, x, y, 16, C.text);
-      text(cv, t.wheels[w].code, x + ruW + 4, y, 11, C.dim);
+      text(cv, t.wheels[w].code, x + ruW + 6, y, 11, C.dim, { attach: true });
     }
   }
   // Цветовой легенды (момент / буксование / торможение) нет: значения подписаны выносками. Остаётся пояснение
   // к длине пружин стоек — это не цвет, а геометрия.
-  text(cv, t.drivetrain.legendTravel, box.x + 6, box.y + box.h + 22, 12, C.dim);
+  text(cv, t.drivetrain.legendTravel, box.x + 6, box.y + box.h + 22, 12, C.dim, { maxW: box.w - 12 });
 }

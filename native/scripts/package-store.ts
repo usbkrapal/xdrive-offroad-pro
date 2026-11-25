@@ -37,6 +37,8 @@ const LANGUAGE = 'ru';
 export interface ReleaseOptions {
   readonly repository?: string;
   readonly tag?: string;
+  /** Каталог с опубликованными инструментами камер 0.1.6 (release_tools.py PUBLISHED_TOOLS): переиспользуются байт в байт. */
+  readonly reuseTools?: string;
 }
 
 /** Сводка verify_store_package.py package. */
@@ -62,6 +64,7 @@ const TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export function parseArgs(argv: readonly string[]): ReleaseOptions {
   let repository: string | undefined;
   let tag: string | undefined;
+  let reuseTools: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const value = (): string => {
@@ -71,14 +74,15 @@ export function parseArgs(argv: readonly string[]): ReleaseOptions {
     };
     if (a === '--repository') repository = value();
     else if (a === '--tag') tag = value();
-    else fail(`unknown argument ${a} (use --repository <owner>/<name> [--tag <tag>])`);
+    else if (a === '--reuse-tools') reuseTools = value();
+    else fail(`unknown argument ${a} (use --repository <owner>/<name> [--tag <tag>] [--reuse-tools <dir>])`);
   }
   if (repository !== undefined && (!REPO_RE.test(repository) || repository.split('/')[1].startsWith('.') || repository.includes('..'))) {
     fail(`--repository must be <owner>/<name>, got ${JSON.stringify(repository)}`);
   }
   if (tag !== undefined && (!TAG_RE.test(tag) || tag.includes('..'))) fail(`--tag ${JSON.stringify(tag)} is not a plain release tag`);
   if (tag !== undefined && repository === undefined) fail('--tag needs --repository (relative URLs need no tag)');
-  return { repository, tag };
+  return { repository, tag, reuseTools };
 }
 
 function run(cmd: string, args: string[], cwd: string, capture: boolean): { status: number; stdout: string; stderr: string } {
@@ -105,6 +109,7 @@ export function verifyAppPackage(path: string, target: VerifyTarget = APP_TARGET
 export function releaseArgs(appTgz: string, opts: ReleaseOptions, spec = APP_TARGET.spec): string[] {
   const args = ['-I', RELEASE_TOOLS, 'release', '--release-dir', RELEASE_DIR, '--quarantine', QUARANTINE_DIR, '--app-tgz', appTgz, '--spec', spec, '--bridge-js', BRIDGE_JS, '--camrx', CAMRX_BIN];
   if (opts.repository) args.push('--repository', opts.repository, '--tag', opts.tag as string);
+  if (opts.reuseTools) args.push('--reuse-tools', opts.reuseTools);
   return args;
 }
 
@@ -146,13 +151,16 @@ export function packageStore(opts: ReleaseOptions, log: (s: string) => void = co
   log(`verified ${pkg.file}: ${pkg.size} bytes, sha256 ${pkg.sha256}`);
   if (opts.repository && !opts.tag) opts = { ...opts, tag: `v${pkg.version}` };
 
-  // Камеры: мост (Node 8) и приёмник (готовая сборка x86-64 Linux; ничем не подменяется).
-  const bridge = bundleBridge();
-  log(`bundled ${bridge.file}: ${bridge.bytes} bytes (${bridge.inputs.length} inputs; requires ${bridge.requires.join(', ')})`);
-  if (!existsSync(CAMRX_BIN) || statSync(CAMRX_BIN).size === 0) {
-    fail(`${CAMRX_BIN} is missing or empty: build it with sh native/camrx/build.sh target (no host build or stub is ever packaged); nothing was written to native/release`);
+  // Камеры: опубликованные инструменты 0.1.6 байт в байт (--reuse-tools), иначе мост (Node 8) и приёмник (готовая сборка
+  // x86-64 Linux; ничем не подменяется).
+  if (opts.reuseTools) log(`camera tools: published files from ${opts.reuseTools} (sha256 checked by release_tools.py)`);
+  else {
+    const bridge = bundleBridge();
+    log(`bundled ${bridge.file}: ${bridge.bytes} bytes (${bridge.inputs.length} inputs; requires ${bridge.requires.join(', ')})`);
+    if (!existsSync(CAMRX_BIN) || statSync(CAMRX_BIN).size === 0) {
+      fail(`${CAMRX_BIN} is missing or empty: build it with sh native/camrx/build.sh target (no host build or stub is ever packaged); nothing was written to native/release`);
+    }
   }
-
   // Сборка, проверка и перенос в native/release — release_tools.py (копии-конфликты — в карантин, чужие файлы — стоп).
   const r = run('python3', releaseArgs(tgz, opts), NATIVE, true);
   if (r.stderr.trim()) log(r.stderr.trim());

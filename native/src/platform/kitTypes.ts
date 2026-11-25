@@ -176,6 +176,26 @@ export interface DisplayApi {
   layout?(): string;
   /** kit сам ведёт экран (mgu-render/1 с касанием, «Весь экран»). */
   own?(): boolean;
+  /** Вендорная правка display.js 0.1.8: что сообщал и делал рендерер (лист поддержки). */
+  readonly stats2?: RendererEvents | null;
+}
+
+export interface RendererEvents {
+  /** Последний X_STATE: на экране, в фронте, время (Date.now). */
+  readonly state: { readonly on: boolean; readonly front: boolean; readonly t: number } | null;
+  readonly tickT: number;
+  readonly readies: number;
+  readonly closes: number;
+  /** Переподключения kit (только upstream-повтор ради контроллера; ради фронта/видимости — никогда). */
+  readonly reconnects: number;
+  /** Рендерер снял слой при приложении в фронте (перекрыто HMI, безответный ввод, камера HMI, молчание). */
+  readonly offScreen: number;
+  /** Рисование в HMI: приложение не в фронте дольше 1,5 с при открытом экране. */
+  readonly blocked: number;
+  readonly lost: number;
+  readonly softFrames: number;
+  /** Видимые ответы на касание / контроллер. */
+  readonly acks: number;
 }
 
 /** ctx из kit/mgu.js (и заглушки kit/tools/hu-stub.js). */

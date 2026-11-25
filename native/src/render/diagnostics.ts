@@ -208,9 +208,9 @@ export function diagnosticsLines(d: (VehicleDiagnostics & { readonly uds?: UdsDi
 const PAGE_W = 1600;
 const TOP = 46;
 const BOTTOM = 512;
-const LINE_H = 44;
-const LINE_TEXT = 19;
-const LINE_BASE = 30;
+const LINE_H = 38;
+const LINE_TEXT = 17;
+const LINE_BASE = 27;
 const LIST_Y = TOP + 74;
 
 interface Target {
@@ -224,7 +224,7 @@ interface Target {
 function button(r: Surface, t: Theme, x: number, y: number, w: number, h: number, label: string): void {
   r.roundRect(x, y, w, h, h / 2, '#ffffff14');
   r.strokeRoundRect(x, y, w, h, h / 2, 1.5, '#ffffff38');
-  text(r, label, x + w / 2, y + h / 2 + 10, 24, t.text, { align: 'center', font: 'bold', spacing: 1, literal: true });
+  text(r, label, x + w / 2, y + h / 2 + 9, 21, t.text, { align: 'center', font: 'bold', spacing: 1, literal: true, maxW: w - 20 });
 }
 
 const toneColor = (tone: Tone, t: Theme) => (tone === 'head' ? C.ice : tone === 'ok' ? t.text : tone === 'warn' ? C.warn : t.dim);
@@ -267,7 +267,7 @@ export function diagnosticsSheet(read: () => (VehicleDiagnostics & { readonly ud
     draw(r, t) {
       r.clear(t.bg);
       const targets: Target[] = [];
-      text(r, DIAG.title, 44, TOP + 42, 30, t.text, { font: 'bold', literal: true });
+      text(r, DIAG.title, 44, TOP + 42, 26, t.text, { font: 'bold', literal: true, maxW: PAGE_W - 40 - 2 * 170 - 20 - 60 });
       const bw = 170;
       const by = TOP + 8;
       const bx = PAGE_W - 40 - bw;
@@ -290,7 +290,8 @@ export function diagnosticsSheet(read: () => (VehicleDiagnostics & { readonly ud
       for (const row of rows) {
         const y = top;
         top += row.h;
-        if (top < LIST_Y || y > bottom) continue;
+        // только строки целиком в списке: программный путь (HMI-картинка) не выполняет CLIP (record.js play)
+        if (y < LIST_Y - 0.5 || top > bottom + 0.5) continue;
         const ln = row.line;
         if (ln.tone === 'head') r.fillRect(40, y + 2, PAGE_W - 80, row.h - 4, '#ffffff0d');
         row.label.forEach((line, i) => text(r, line, 52, y + LINE_BASE + i * LINE_H, LINE_TEXT, toneColor(ln.tone, t), { literal: true }));

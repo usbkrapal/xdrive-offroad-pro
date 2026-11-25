@@ -698,45 +698,44 @@ describe('рендерер пропал / перезапуск / штатный 
     } finally { await r.close(); }
   });
 
-  it('зависший скрытый рендерер переподключается только при подтверждённом foreground приложения', async () => {
+  it('рендерер снял слой при приложении в фронте (covered / deaf / yield: STATE on 0, front 1): ни одного переподключения, одна картинка в HMI, затем снова GPU', async () => {
     const r = await rig({ native: true, caps: 1 | 2 | 4 | 8 | 16, autoTick: false });
     try {
       await r.render();
-      const video = r.display.gpu as unknown as { video(id: number, path: string): boolean };
-      assert.ok(video.video(101, '/dev/shm/mgu-video-xop-test'));
-      const d = r.display as unknown as { shownT: number; tickT: number; rendererFront: boolean | null; renderRetryT: number; _softIfNoTick(): void };
-      const state = (front: number) => {
+      const d = r.display as unknown as { shownT: number; tickT: number; rendererOn: boolean | null; stats2: { offScreen: number; softFrames: number }; _softIfNoTick(): void };
+      const state = (on: number, front: number) => {
         const p = Buffer.alloc(12);
+        p.writeUInt32LE(on, 4);
         p.writeUInt32LE(front, 8);
         r.srv.send(0x4d520102, p);
       };
-      state(0);
+      state(0, 1);
       await flush();
-      d.shownT = Date.now() - 7000; d.tickT = 0;
+      await new Promise((ok) => setTimeout(ok, 50));
+      assert.equal(d.rendererOn, false);
       const connections = r.srv.conns.length;
-      d._softIfNoTick();
-      await flush();
-      assert.equal(r.srv.conns.length, connections, 'поверх другого экрана переподключения нет');
-      state(1);
-      await flush();
-      d._softIfNoTick();
-      await r.srv.until(() => r.srv.conns.length > connections && !!r.display.gpu!.ready, 'восстановление соединения');
-      assert.ok(d.renderRetryT > 0);
-      const places = r.srv.of(MSG.PLACE).length;
-      await r.render();
-      await r.srv.until(() => r.srv.of(MSG.FRAME).some((m) => m.conn === connections), 'кадр после восстановления');
-      assert.ok(r.srv.of(MSG.PLACE).length >= places);
-      assert.ok(r.srv.of(MSG.ATLAS, connections).length, 'шрифты пересланы');
-      assert.ok(r.srv.of(MSG.TEN, connections).length, 'растры пересланы');
-      assert.ok(r.srv.of(13, connections).length, 'регистрация VIDEO переслана');
-      d.shownT = Date.now() - 7000; d.tickT = 0;
-      state(1);
-      await flush();
-      d._softIfNoTick();
-      await flush();
-      assert.equal(r.srv.conns.length, connections + 1, 'повторное переподключение ограничено по времени');
-      assert.ok(r.display.own());
+      const soft = r.softImages.length;
+      // 60 «секунд» без TICK: страница меняется, проверка отсутствия подтверждений идёт каждые 0,5 с
+      for (let k = 0; k < 6; k++) {
+        d.shownT = Date.now() - 60000; d.tickT = 0;
+        r.app.setPage(k % 5);
+        await r.render();
+        d._softIfNoTick();
+        await flush();
+      }
+      assert.equal(r.srv.conns.length, connections, 'переподключения нет: состояние фронта у HMI, не у соединения');
+      assert.equal(r.softImages.length - soft, 1, 'ровно одна картинка в HMI, а не по каждому кадру');
+      assert.equal(d.stats2.offScreen, 1, 'причина записана для диагностики');
       noPager(r);
+      assert.ok(r.display.own(), 'kit по-прежнему ведёт экран (рендерер вернёт слой сам)');
+      state(1, 1);
+      r.srv.send(MSG.TICK, Buffer.alloc(8));
+      await flush();
+      const before = r.srv.of(MSG.FRAME).length;
+      r.app.setPage(1);
+      await r.render();
+      await r.srv.until(() => r.srv.of(MSG.FRAME).length > before, 'кадр снова в слой');
+      assert.equal(r.srv.conns.length, connections);
     } finally { await r.close(); }
   });
 
@@ -783,8 +782,8 @@ describe('рендерер пропал / перезапуск / штатный 
   });
 });
 
-describe('восстановление уменьшенного интерфейса', () => {
-  it('новый READY снимает старый fallback и восстанавливает полную поверхность после ограниченного reconnect', async () => {
+describe('приложение не в фронте (STATE front 0): запасная картинка в HMI без переподключений', () => {
+  it('повторные STATE(0,0) не откладывают переход, переподключений нет, фронт вернулся — снова полная поверхность', async () => {
     const r = await rig({ native: true, caps: 1 | 2 | 4 | 8 });
     let repeating: NodeJS.Timeout | null = null;
     try {
@@ -792,14 +791,21 @@ describe('восстановление уменьшенного интерфей
       const p = Buffer.alloc(12);
       r.srv.send(0x4d520102, p);
       repeating = setInterval(() => r.srv.send(0x4d520102, p), 300);
-      await r.srv.until(() => r.srv.conns.length >= 2 && !!r.display.gpu!.ready, 'переподключение потерянной поверхности', 5500);
+      const d = r.display as unknown as { blocked: boolean; stats2: { reconnects: number; blocked: number } };
+      await r.srv.until(() => d.blocked, 'переход к рисованию в HMI', 2500);
+      await new Promise((ok) => setTimeout(ok, 4000));
       clearInterval(repeating); repeating = null;
+      assert.equal(r.srv.conns.length, 1, 'ни одного переподключения: новое соединение получило бы тот же front 0');
+      assert.equal(d.stats2.blocked, 1);
+      assert.equal(r.display.own(), false);
+      const front = Buffer.alloc(12);
+      front.writeUInt32LE(1, 4);
+      front.writeUInt32LE(1, 8);
+      r.srv.send(0x4d520102, front);
+      await r.srv.until(() => !d.blocked, 'фронт вернулся');
       await r.render();
-      const d = r.display as unknown as { blocked: boolean; frontTries: number };
-      assert.equal(d.blocked, false);
       assert.equal(r.display.place!.full, true);
       assert.equal(r.display.own(), true);
-      assert.equal(d.frontTries, 1, 'одна попытка, без бесконечного переподключения');
     } finally { if (repeating) clearInterval(repeating); await r.close(); }
   });
 });

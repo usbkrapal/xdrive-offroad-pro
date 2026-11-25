@@ -54,6 +54,8 @@ let seq = 0;
 export class FakeRenderer {
   readonly msgs: RenderMsg[] = [];
   readonly conns: Socket[] = [];
+  /** Вызывается на каждое сообщение клиента (по порядку прихода). */
+  readonly listeners: ((m: RenderMsg) => void)[] = [];
   opts: RendererOpts;
   private waiters: (() => void)[] = [];
 
@@ -90,6 +92,7 @@ export class FakeRenderer {
         const payload = Buffer.from(buf.subarray(8, 8 + len));
         buf = buf.subarray(8 + len);
         this.msgs.push({ conn, type, payload });
+        for (const l of this.listeners) l({ conn, type, payload });
         if (type === MSG.HELLO) this.hello(s, payload);
         if (type === MSG.FRAME && this.opts.autoTick) s.write(frame(MSG.TICK, Buffer.alloc(8)));
       }
@@ -176,7 +179,8 @@ export function u32(b: Buffer, off = 0): Uint32Array {
  * Возвращает [{ op, at, n }] или бросает на неизвестной операции / обрезанном потоке.
  */
 export function walkOps(u: Uint32Array): { op: number; at: number; n: number }[] {
-  const fixed: Record<number, number> = { 1: 1, 2: 5, 4: 6, 5: 7, 7: 8, 8: 11, 9: 6, 12: 3, 13: 4, 14: 0, 15: 9, 16: 1, 17: 3, 18: 6 };
+  // 19: VIDEO x y w h r id (PROTOCOL.md «Video»)
+  const fixed: Record<number, number> = { 1: 1, 2: 5, 4: 6, 5: 7, 7: 8, 8: 11, 9: 6, 12: 3, 13: 4, 14: 0, 15: 9, 16: 1, 17: 3, 18: 6, 19: 6 };
   const out: { op: number; at: number; n: number }[] = [];
   for (let i = 0; i < u.length; ) {
     const op = u[i];

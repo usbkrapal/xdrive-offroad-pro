@@ -693,8 +693,29 @@ def notice_text(version, source_name, source_sha, kit_name, repository=None, tag
     return tpl.format(version=version, source_name=source_name, source_sha256=source_sha, kit_name=kit_name, source_where=where).encode('utf-8')
 
 
+# Camera tools published with v0.1.6 (owner-confirmed working on the car) and carried unchanged by v0.1.7: reused byte for
+# byte (a rebuild rewrites the source URL in xop-camrx's NOTICE and gives another hash for the same version).
+# Source: work/qa/car-0.1.6/publication.json (release v0.1.6, id 452860261) and native/release/SHA256SUMS of v0.1.7.
+PUBLISHED_TOOLS = {
+    'xop-camera-bridge@0.1.6.tgz': (13220, 'a86e24590198fa8fefe12dbaa93bb0559601b846a4ffbd7a54c4bb00a4e53734'),
+    'xop-camrx@0.1.6.tgz': (265235, 'defd845ddf3be590a433e5b68a05ff251839aabb76f4a21175dea15032d6ee25'),
+    'xop-camrx-0.1.6-source.tar.gz': (141227, '294919b9570a74c4bf30128447fe42702eb3d568851205625ca3e87183fc22a9'),
+}
+
+
+def published_tools(directory):
+    """The three published camera-tool files from directory, each checked against PUBLISHED_TOOLS (size and sha256)."""
+    out = {}
+    for name, (size, digest) in PUBLISHED_TOOLS.items():
+        data = read_input(os.path.join(directory, name), 'published %s' % name)
+        if len(data) != size or sha256(data) != digest:
+            raise PackError('%s is not the published file: %d bytes, sha256 %s (expected %d, %s)' % (name, len(data), sha256(data), size, digest))
+        out[name] = data
+    return out
+
+
 def assemble(out, app_tgz, spec, bridge_js, camrx_bin, repository=None, tag=None, node8=NODE8_DEFAULT, project=PROJECT,
-             packaging=PACKAGING, log=print):
+             packaging=PACKAGING, log=print, reuse_tools=None):
     """Writes the combined release into the new empty folder out and verifies it; returns the summary.
     Raises PackError with every problem found."""
     import verify_store_package as vsp
@@ -708,16 +729,26 @@ def assemble(out, app_tgz, spec, bridge_js, camrx_bin, repository=None, tag=None
     if app_problems or not app:
         raise PackError('app package:\n  ' + '\n  '.join(app_problems))
     mb, mc = load_manifest(BRIDGE_ID, packaging), load_manifest(CAMRX_ID, packaging)
-    camrx_bytes = read_input(camrx_bin, 'xop-camrx binary')
-    ep, _es = check_elf(camrx_bytes)
-    if ep:
-        raise PackError('xop-camrx binary %s is not the head-unit build:\n  %s' % (camrx_bin, '\n  '.join(ep)))
-    src_name, src_bytes, sp = build_source_archive(mc['version'], sha256(camrx_bytes), project)
-    problems.extend(sp)
-    kit_c = '%s@%s.tgz' % (CAMRX_ID, mc['version'])
-    notice = notice_text(mc['version'], src_name, sha256(src_bytes), kit_c, repository, tag)
-    name_c, bytes_c, _km = build_kit(mc, project, generated={'NOTICE': notice}, overrides={'xop-camrx': camrx_bin})
-    name_b, bytes_b, _kb = build_kit(mb, project, overrides={'bridge.js': bridge_js})
+    if reuse_tools:
+        # the published 0.1.6 tools, byte for byte (verified below exactly like built ones)
+        pub = published_tools(reuse_tools)
+        name_b, name_c = '%s@%s.tgz' % (BRIDGE_ID, mb['version']), '%s@%s.tgz' % (CAMRX_ID, mc['version'])
+        src_name = 'xop-camrx-%s-source.tar.gz' % mc['version']
+        if set(pub) != {name_b, name_c, src_name}:
+            raise PackError('packaging manifests name %s, the published tools are %s' % (sorted([name_b, name_c, src_name]), sorted(pub)))
+        bytes_b, bytes_c, src_bytes = pub[name_b], pub[name_c], pub[src_name]
+        log('reusing published camera tools: %s' % ', '.join('%s %s' % (n, sha256(pub[n])[:12]) for n in sorted(pub)))
+    else:
+        camrx_bytes = read_input(camrx_bin, 'xop-camrx binary')
+        ep, _es = check_elf(camrx_bytes)
+        if ep:
+            raise PackError('xop-camrx binary %s is not the head-unit build:\n  %s' % (camrx_bin, '\n  '.join(ep)))
+        src_name, src_bytes, sp = build_source_archive(mc['version'], sha256(camrx_bytes), project)
+        problems.extend(sp)
+        kit_c = '%s@%s.tgz' % (CAMRX_ID, mc['version'])
+        notice = notice_text(mc['version'], src_name, sha256(src_bytes), kit_c, repository, tag)
+        name_c, bytes_c, _km = build_kit(mc, project, generated={'NOTICE': notice}, overrides={'xop-camrx': camrx_bin})
+        name_b, bytes_b, _kb = build_kit(mb, project, overrides={'bridge.js': bridge_js})
     for n, b in ((name_c, bytes_c), (name_b, bytes_b), (src_name, src_bytes), (app['file'], read_input(app_tgz)), ('icon.png', icon)):
         with open(os.path.join(out, n), 'wb') as f:
             f.write(b)
@@ -773,7 +804,7 @@ def managed(name, app_id=APP_ID):
 
 
 def install_release(release_dir, quarantine_root, app_tgz, spec, bridge_js, camrx_bin, repository=None, tag=None,
-                    node8=NODE8_DEFAULT, project=PROJECT, packaging=PACKAGING, stamp=None, log=print):
+                    node8=NODE8_DEFAULT, project=PROJECT, packaging=PACKAGING, stamp=None, log=print, reuse_tools=None):
     """Assembles and verifies the combined release beside release_dir, then puts it in place:
     - files this tool manages are replaced;
     - Finder/iCloud conflict copies of them ('catalog 2.json') are moved, untouched, to quarantine_root/<stamp>/;
@@ -799,7 +830,7 @@ def install_release(release_dir, quarantine_root, app_tgz, spec, bridge_js, camr
     if os.path.exists(tmp):
         raise PackError('%s exists (an earlier run?); remove it' % tmp)
     try:
-        assemble(tmp, app_tgz, spec, bridge_js, camrx_bin, repository, tag, node8, project, packaging, log)
+        assemble(tmp, app_tgz, spec, bridge_js, camrx_bin, repository, tag, node8, project, packaging, log, reuse_tools)
         moved = []
         if copies:
             qdir = os.path.join(quarantine_root, stamp or time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()))
@@ -852,6 +883,8 @@ def main(argv=None):
     r_.add_argument('--repository')
     r_.add_argument('--tag')
     r_.add_argument('--node8', default=os.environ.get('XOP_NODE8', NODE8_DEFAULT))
+    for x in (a_, r_):
+        x.add_argument('--reuse-tools', default=None, help='folder with the published 0.1.6 camera tools (checked against PUBLISHED_TOOLS) instead of building them')
     a = ap.parse_args(argv)
     try:
         if a.cmd == 'kit':
@@ -870,19 +903,19 @@ def main(argv=None):
         elif a.cmd == 'check-elf':
             p, s = check_elf(read_input(a.path))
         elif a.cmd == 'release':
-            if not os.path.isfile(a.camrx):
+            if not a.reuse_tools and not os.path.isfile(a.camrx):
                 raise PackError('xop-camrx binary not found: %s\n  build it with: sh native/camrx/build.sh target '
                                 '(the x86-64 Linux build; a host or stub build is never packaged)' % a.camrx)
             s, moved = install_release(a.release_dir, a.quarantine, a.app_tgz, json.load(open(a.spec, encoding='utf-8')),
                                        a.bridge_js, a.camrx, a.repository, a.tag, a.node8,
-                                       log=lambda m: print(m, file=sys.stderr))
+                                       log=lambda m: print(m, file=sys.stderr), reuse_tools=a.reuse_tools)
             s = dict(s, quarantined=moved)
             p = []
         else:
             if a.tag and not a.repository:
                 raise PackError('--tag needs --repository')
             s = assemble(a.out, a.app_tgz, json.load(open(a.spec, encoding='utf-8')), a.bridge_js, a.camrx,
-                         a.repository, a.tag, a.node8, log=lambda m: print(m, file=sys.stderr))
+                         a.repository, a.tag, a.node8, log=lambda m: print(m, file=sys.stderr), reuse_tools=a.reuse_tools)
             p = []
         if p:
             print('%s failed (%d problems):' % (a.cmd, len(p)), file=sys.stderr)
